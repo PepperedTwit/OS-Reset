@@ -1,0 +1,4 @@
+Cargo.lock
+dat/*
+src/*
+!src/.bashrc

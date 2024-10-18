@@ -1,0 +1,37 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+
+        // Windows setup
+        "terminal.integrated.defaultProfile.windows": "Git Bash",
+
+        // Linux setup
+        "terminal.integrated.env.linux": {
+            "CBASH": "/mnt/Storage/Desktop/OSReset/src/.bashrc"
+        },
+
+        "terminal.integrated.profiles.linux": {
+            "bash": {
+                "path": "bash",
+                "args": ["-c", "cp $CBASH $HOME/.bashrc && exec bash -i"]
+            }
+        },
+    }
+}
+
+// ------------------------------------ Command Dictionary ------------------------------------
+// "gsettings list-recursively org.nemo" - Shows all available prefferences
+// "gsettings list-recursively | grep -i <keyword>" Search for Setting via keyword
+//     E1 - gsettings list-recursively | grep -i "theme"
+//     E2 - gsettings list-recursively | grep -i "automount"
+// 'sudo dpkg --configure -a ' - Fixes packages if interupted or error
+// 'sudo apt update' - Updates package lists
+// 'sudo apt upgrade' - Downloads and installs all packages from list
+// 'sudo apt --fix-broken install' - Installs any packages that have unmet dependencies
+
+// -------------------------------------- Flag Dictionary -------------------------------------
+// '-y' - Automatically inputs Yes for input requests
