@@ -1,36 +1,18 @@
 #!/bin/bash
 
 # <CSF-S>
-export DAT="/mnt/Storage/Desktop/OSReset/dat";
-export STORAGE="/mnt/Storage";
-
-export MASTER="/mnt/Master";
-export NOVEL="/mnt/Novel";
-export BACKUP="/mnt/Backup";
-
-export V_MASTER="/mnt/V-Master";
-export V_NOVEL="/mnt/V-Novel";
-export V_BACKUP="/mnt/V-Backup";
-
 function closing() {
 
-    function trapper() {
-        while true; do
-            read -r -p "Type 'Close' to exit: " input
-            if [ "$input" = "Close" ]; then
-                break;
-            else
-                echo "Invalid input. Please type 'Close' to exit.";
-            fi
-        done
-    }
+    echo -e "Exiting script. Bash died.";
 
-    if echo "$BASH_COMMAND" | grep -qE 'exit|INT|TERM'; then
-        trapper; exec bash;
-    else 
-        echo "----------------------------------------";
-        echo ""; echo "";
-    fi
+    while true; do
+        read -r -p "Type 'Close' to exit: " input
+        if [ "$input" = "Close" ]; then
+            echo -e "\n"; exec bash;
+        else
+            echo "Invalid input. Please type 'Close' to exit.";
+        fi
+    done
 
 }
 
@@ -92,7 +74,6 @@ function change_owner() {
         echo "Less than 2 arguments were given. Exiting."; exit 1; 
     fi
 
-
     local owner_group="$1"; local IFS; shift;
 
     if ! IFS=":" read -r user group <<< "$owner_group"; then echo "Failed to read the owner and group. Exiting."; exit 1; fi
@@ -142,19 +123,13 @@ function install_flatpak() {
     done
 }
 
-function list_deb() {
-
-    ls "../3OS/Linux/Apps";
-
-}
-
 function install_dpkg() {
 
     trap closing INT TERM EXIT RETURN;
 
     if [ $# -eq 0 ]; then echo "No package specified. Exiting."; exit 1; fi
 
-    local apps="/mnt/Storage/Desktop/OSReset/dat/Linux/Apps";
+    local apps="./dat/Linux/Apps";
 
     for pkg in "$@"; do
 
@@ -614,11 +589,39 @@ function convert_to_mp4() {
 
 function insert_script() {
 
-    local input="$1";
-    local output="$2";
-    
+    trap closing INT TERM EXIT;
+
+    local write_type input output insert;
+
+    while [ "$1" != "" ]; do
+
+        case "$1" in
+            -a | -o) 
+                if [ -z "$write_type" ]; then write_type="$1"; else 
+                    echo "Error: Too many write types provided." >&2; exit 1;
+                fi
+            ;;
+            *) 
+                if [ -f "$1" ]; then
+
+                    if [ -z "$input" ]; then input="$1";
+
+                    elif [ -z "$output" ]; then output="$1"; else 
+                        echo "Error: Too many files provided." >&2; exit 1;
+                    fi
+
+                fi
+            ;;
+        esac
+        shift;
+    done
+
+    # Check if the write flag was provided
+    if [ -z "$write_type" ]; then echo "Error: No valid write flag was provided. Use [-a, -o]" >&2; exit 1; fi
+
     # Check if the input file exists
     if [ ! -f "$input" ]; then echo "Error: No script source file was provided." >&2; exit 1; fi
+
     # Check if the output file exists
     if [ ! -f "$output" ]; then echo "Error: No output file provided." >&2; exit 1; fi
 
@@ -679,15 +682,16 @@ function insert_script() {
     fi
 
     # Both tags in the input and output exist and are correctly ordered
-    
-    # Copy the content between the tags from the input
-    local insert=$(sed -n "$((input_st+1)),$((input_et-1))p" "$input");
 
-    # Create a temporary file
-    temp=$(mktemp)
+    middle=$(mktemp); bottom=$(mktemp); 
 
-    # Backup the content from (including) the end tag to EOF
-    if ! sed -n "${output_te},\$p" "$output" > "$temp"; then
+    # Backup the content between the tags from the output
+    if ! sed -n "$((output_ts+1)),$((output_te-1))p" "$output" > "$middle"; then
+        echo "Error: Failed to extract the content between the tags." >&2; exit 1;
+    fi
+
+    # Backup the content from the end tag to EOF
+    if ! sed -n "$output_te,\$p" "$output" > "$bottom"; then
         echo "Error: Failed to extract the content after the end tag." >&2; exit 1;
     fi
 
@@ -696,272 +700,26 @@ function insert_script() {
         echo "Error: Failed to remove the existing content below the start tag." >&2; return 1
     fi
 
+    insert=$(sed -n "$((input_st+1)),$((input_et-1))p" "$input");
+
+    if [ "$write_type" == "-a" ]; then echo "$insert" >> "$middle";
+
+    elif [ "$write_type" == "-o" ]; then echo "$insert" > "$middle"; fi 
+
     # Insert the new content below the start tag
-    if ! echo "$insert" >> "$output"; then
+    if ! cat "$middle" >> "$output"; then
         echo "Error: Failed to insert the new content below the start tag." >&2; exit 1;
     fi
 
     # Append the backed up content after the new content
-    if ! cat "$temp" >> "$output"; then
+    if ! cat "$bottom" >> "$output"; then
         echo "Error: Failed to append the backed-up content." >&2; exit 1;
     fi
 
-    # Clean up temporary file
-    rm -f "$temp";
+    # Clean up temporary files
+    rm -f "$middle" "$bottom";
 
     echo "Bashrc has been updated successfully.";
-
-}
-
-# --------------------------------------------------------------------------------------------------------------------
-# ------------------------------------------------------- Setup ------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------
-
-function get_usb() {
-
-    local serial="010129449371915a95ad4df62be4c0d466987bc29b5e7dbfa1e7aad6f435ab858806000000000000000000006a8d694e00867500ab5581076a2c7e8e";
-
-    # Use globbing to match the serial number in the filenames
-    local device_link="$(ls /dev/disk/by-id/*"$serial"* 2>/dev/null | head -n 1)";
-
-    # If device not found return early
-    if [ -z "$device_link" ]; then echo "USB device not found"; return 1; fi
-
-    local partition_1="$(readlink -f $device_link)1";
-
-    if [ ! -b "$partition_1" ]; then echo "USB partition not found"; return 1; fi
-
-    gio mount -d "$partition_1" 2>/dev/null;
-
-    local label=$(lsblk -no LABEL "$partition_1");
-    local mount="/media/$USER/$label";
-
-    if [ ! -d "$mount" ]; then echo "Failed to mount USB"; return 1; fi
-
-    echo "$mount";
-    
-}
-
-function copy_prefs() {
-
-    trap closing INT TERM EXIT;
-
-    if [ ! -d "$DAT" ]; then echo "Failed to locate the OSReset/dat directory."; exit 1; fi
-
-    local clone="$DAT/Linux/$USER";
-    local usb=$(get_usb);
-
-    if [ -d "$usb" ]; then
-
-        if ! rsync -rltDvh --delete "$clone" "$usb"/; then
-            echo "Failed to copy over configuration files into USB."; exit 1;
-        else 
-            echo ""; echo "USB update successful!"; echo "";
-        fi
-
-        gio mount -u "$usb";
-
-    fi 
-
-    if ! rsync -avh "$clone"/ "$HOME"/; then 
-        echo "Failed to copy over configuration files."; exit 1;
-    else 
-        echo ""; echo "Success! Closing to update terminal."; echo ""; exit 0;
-    fi
-
-}
-
-function core_setup() {
-
-    trap closing INT TERM EXIT;
-
-    if [ ! -d "$STORAGE" ]; then
-        install_signal; printf "\n\n";
-        echo "Failed to locate the Master directory."; 
-        echo "Use Signal to unlock your lux drives first."; exit 1;
-    fi
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # -------------------------------------------------------- GRUB -------------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    # Update GRUB Settings
-    sudo sed -i 's/GRUB_TIMEOUT=.*/GRUB_TIMEOUT=90/' /etc/default/grub;
-    sudo sed -i 's/GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' /etc/default/grub;
-    sudo update-grub;
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # ------------------------------------------------- Update APT Mirrors ------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    local list="/etc/apt/sources.list.d/official-package-repositories.list";
-
-    sudo sed -i 's|http://packages.linuxmint.com|https://mirror.aarnet.edu.au/pub/linuxmint-packages|g' "$list";
-    sudo sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirror.aarnet.edu.au/pub/ubuntu/archive|g' "$list";
-    sudo apt update;
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # ------------------------------------------------------ Settings -----------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    # Nemo - List View
-    gsettings set org.nemo.list-view default-visible-columns "['name', 'size', 'type', 'date_modified', 'date_created']"; # Add the "Date Created" column to the list view
-
-    # Nemo - Preferences
-    gsettings set org.nemo.preferences enable-delete false; # Disable the delete command that bypasses the trash
-    gsettings set org.nemo.preferences show-open-in-terminal-toolbar true; # Show "Open in Terminal" option in the context menu
-    gsettings set org.nemo.preferences executable-text-activation 'ask'; # View executable text files when opened
-    gsettings set org.nemo.preferences close-device-view-on-device-eject true; # Automatically close the device's tabs when the device is unmounted or ejected
-    gsettings set org.nemo.preferences.menu-config selection-menu-move-to true; # Add "Move to" to the visible entries in the context menu
-    gsettings set org.nemo.preferences tooltips-show-birth-date true; # Show the birth date in the tooltips
-    gsettings set org.nemo.window-state network-expanded false; # Network is not expanded by default
-    gsettings set org.nemo.window-state devices-expanded false; # Devices are not expanded by default
-
-    # Cinnamon - All
-    gsettings set org.cinnamon.desktop.media-handling automount false; # Disable automounting of media
-    gsettings set org.cinnamon.desktop.interface gtk-theme 'Mint-Y-Dark-Aqua'; # Set the GTK theme to Dark
-    gsettings set org.cinnamon.desktop.session idle-delay 0; # Set the idle delay to never
-    gsettings set org.cinnamon.desktop.screensaver lock-delay 0; # Set the lock delay to immediately
-
-    # Cinnamon - Laptop
-
-    gsettings set org.cinnamon.settings-daemon.plugins.power sleep-display-ac 0; # Set the display sleep timeout to never on AC
-    gsettings set org.cinnamon.settings-daemon.plugins.power sleep-display-battery 0 # Set the display sleep timeout to 30 minutes on battery
-
-    gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-ac-timeout 0; # Set the sleep timeout to never
-    gsettings set org.cinnamon.settings-daemon.plugins.power sleep-inactive-battery-timeout 1800; # Set the sleep timeout to 30 minutes
-
-    gsettings set org.cinnamon.settings-daemon.plugins.power lid-close-ac-action 'shutdown'; # Shutdown when the lid is closed on AC
-    gsettings set org.cinnamon.settings-daemon.plugins.power lid-close-battery-action 'shutdown'; # Shutdown when the lid is closed on battery
-
-    # X - Editor
-    gsettings set org.x.editor.preferences.editor prefer-dark-theme true; # Use dark theme for text editors
-
-    # Set VLC as the default media player
-    xdg-mime default vlc.desktop audio/mpeg audio/x-mpeg audio/ogg audio/x-vorbis+ogg audio/wav audio/x-wav audio/x-m4a \
-    audio/mp4 video/mp4 video/x-msvideo video/mpeg video/ogg video/webm video/x-matroska video/x-flv application/ogg;
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # ------------------------------------------------------ Folders ------------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    # Update user directories
-    xdg-user-dirs-update --set DESKTOP "$STORAGE/Desktop";
-    xdg-user-dirs-update --set DOWNLOAD "$STORAGE/Downloads";
-    xdg-user-dirs-update --set PICTURES "$MASTER/Pictures";
-    xdg-user-dirs-update --set VIDEOS "$MASTER/Videos";
-    xdg-user-dirs-update --set MUSIC "$MASTER/Music";
-    xdg-user-dirs-update --set DOCUMENTS "$MASTER/Documents";
-
-    # Move original directories to trash
-    if [ -d "$HOME/Desktop" ]; then gio trash "$HOME/Desktop"; fi
-    if [ -d "$HOME/Downloads" ]; then gio trash "$HOME/Downloads"; fi
-    if [ -d "$HOME/Pictures" ]; then gio trash "$HOME/Pictures"; fi
-    if [ -d "$HOME/Videos" ]; then gio trash "$HOME/Videos"; fi
-    if [ -d "$HOME/Music" ]; then gio trash "$HOME/Music"; fi
-    if [ -d "$HOME/Documents" ]; then gio trash "$HOME/Documents"; fi
-    if [ -d "$HOME/Public" ]; then gio trash "$HOME/Public"; fi
-    if [ -d "$HOME/Templates" ]; then gio trash "$HOME/Templates"; fi
-
-    if [ ! -d "$MASTER" ] && [ ! -d "$NOVEL" ] && [ ! -d "$BACKUP" ]; then
-        sudo mkdir -p "$MASTER" "$V_MASTER" "$NOVEL" "$V_NOVEL" "$BACKUP" "$V_BACKUP"; # Create mount points
-        change_owner "$USER":"$USER" "$MASTER" "$V_MASTER" "$NOVEL" "$V_NOVEL" "$BACKUP" "$V_BACKUP"; # Change ownership to user. (Otherwise, Cryptomator will crash)
-    fi
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # --------------------------------------------------- Purge Firefox ---------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    # Remove Firefox if installed as a system package
-    if dpkg -l | grep -q firefox; then
-        sudo apt-get purge firefox -y
-        sudo apt-get autoremove
-        sudo apt-get clean
-        rm -rf ~/.mozilla
-        rm -rf ~/.cache/mozilla/firefox/
-        sudo apt-mark hold firefox #Prevent Firefox from being reinstalled
-        echo "Firefox has been purged, related files removed, and the package is now held."
-    fi
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # ---------------------------------------------------- Add KeyRings ---------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    add_gpg \
-    "https://packages.microsoft.com/keys/microsoft.asc packages.microsoft.gpg" \
-    "https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg brave-browser-archive-keyring.gpg" \
-    "https://syncthing.net/release-key.gpg syncthing-archive-keyring.gpg";
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # -------------------------------------------------------- APT --------------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    updatefix; install_apt wget gpg curl software-properties-common apt-transport-https shellcheck \
-    flatpak libapr1 libaprutil1 libxml2-dev clinfo cmake vlc build-essential fonts-firacode \
-    libsecret-tools;
-
-    sudo add-apt-repository -y ppa:yubico/stable; # Add the YubiKey repository
-
-    # VSCode Repository
-    echo "deb [arch=amd64,arm64,armhf signed-by=/etc/apt/keyrings/packages.microsoft.gpg] \
-    https://packages.microsoft.com/repos/vscode stable main" | sudo tee /etc/apt/sources.list.d/vscode.list;
-
-    # Edge Repository
-    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] \
-    https://packages.microsoft.com/repos/edge/ stable main" | sudo tee /etc/apt/sources.list.d/microsoft-edge.list;
-
-    # Brave Repository
-    echo "deb [signed-by=/etc/apt/keyrings/brave-browser-archive-keyring.gpg] \
-    https://brave-browser-apt-release.s3.brave.com/ stable main" | sudo tee /etc/apt/sources.list.d/brave-browser-release.list;
-
-    # Syncthing Repository
-    echo "deb [signed-by=/etc/apt/keyrings/syncthing-archive-keyring.gpg] \
-    https://apt.syncthing.net/ syncthing stable" | sudo tee /etc/apt/sources.list.d/syncthing.list;
-
-    # Pinning Syncthing Packages
-    printf "Package: *\nPin: origin apt.syncthing.net\nPin-Priority: 990\n" | sudo tee /etc/apt/preferences.d/syncthing.pref;
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # ----------------------------------------------------- Basic Apps ----------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    install_signal; install_apt "code" "brave-browser" "yubikey-manager-qt" "yubioath-desktop" "syncthing";
-    
-    # Set default browser to Brave
-    xdg-settings set default-web-browser "brave-browser";
-
-    install_flatpak "org.cryptomator.Cryptomator"; # Install Cryptomator
-
-    sudo flatpak override org.cryptomator.Cryptomator --filesystem="$STORAGE/Cryptomator"; # Give Cryptomator access to Storage
-    sudo flatpak override org.cryptomator.Cryptomator --filesystem="/mnt"; # Give Cryptomator access to Mount Points
-
-    # ---------------------------------------------------------------------------------------------------------------------
-    # ------------------------------------------------------- Clean Up ----------------------------------------------------
-    # ---------------------------------------------------------------------------------------------------------------------
-
-    updatefix; sudo reboot;
-
-}
-
-function setup_user() {
-
-    trap closing INT TERM EXIT;
-
-    if [ ! -d "$DAT" ]; then echo "Failed to locate the OSReset/dat directory."; exit 1; fi
-
-    local auto_start="$DAT/Linux/AutoStart";
-
-    install_rust; install_py; install_R;
-
-    install_dpkg "Kuro.deb" "Discord.deb" "Outlook.deb";
-
-    install_apt fonts-dejavu dropbox kalarm xournal default-jdk texlive-full \
-    pandoc gimp git-all android-sdk-platform-tools microsoft-edge-stable;
-
-    install_flatpak "com.rtosta.zapzap";
-
-    # Copy user Autostart files
-    copy_dir "$auto_start" "$HOME/.config/autostart";
 
 }
 
@@ -996,13 +754,10 @@ function help() {
 
 # Export common functions for use in subshells
 export -f closing copy_dir change_owner remove_files install_flatpak install_dpkg \
-install_apt updatefix convert_to_mp4 run_py git_commit add_gpg;
+install_apt updatefix convert_to_mp4 run_py git_commit add_gpg insert_script;
 
 # Export application installation functions for use in subshells
 export -f install_nordvpn install_rust install_R install_javascript install_py;
-
-# Export setup functions for use in subshells
-export -f get_usb copy_prefs core_setup setup_user help insert_script;
 
 echo "Welcome to the Linux environment. Type 'help' to see available functions.";
 
@@ -1033,4 +788,4 @@ export NVM_DIR="$HOME/.nvm";
 # Code below is outside of the CSF tags and will not be included in the bashrc file
 # Code below is outside of the CSF tags and will not be included in the bashrc file
 
-insert_script "./src/func.sh" "$HOME/.bashrc";
+insert_script "./src/func.sh" "$HOME/.bashrc" -o;
