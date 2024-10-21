@@ -11,13 +11,13 @@
 
         // Linux setup
         "terminal.integrated.env.linux": {
-            "CBASH": "/mnt/Storage/Desktop/OSReset/src/.bashrc"
+            "UBASH": "./src/func.sh"
         },
 
         "terminal.integrated.profiles.linux": {
             "bash": {
                 "path": "bash",
-                "args": ["-c", "cp $CBASH $HOME/.bashrc && exec bash -i"]
+                "args": ["-c", ". $UBASH && exec bash -i"]
             }
         },
     }

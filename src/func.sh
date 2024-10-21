@@ -1,127 +1,7 @@
-# ~/.bashrc: executed by bash(1) for non-login shells.
-# see /usr/share/doc/bash/examples/startup-files (in the package bash-doc)
-# for examples
+#!/bin/bash
 
-# If not running interactively, don't do anything
-case $- in
-    *i*) ;;
-      *) return;;
-esac
-
-# don't put duplicate lines or lines starting with space in the history.
-# See bash(1) for more options
-HISTCONTROL=ignoreboth
-
-# append to the history file, don't overwrite it
-shopt -s histappend
-
-# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
-HISTSIZE=1000
-HISTFILESIZE=2000
-
-# check the window size after each command and, if necessary,
-# update the values of LINES and COLUMNS.
-shopt -s checkwinsize
-
-# If set, the pattern "**" used in a pathname expansion context will
-# match all files and zero or more directories and subdirectories.
-#shopt -s globstar
-
-# make less more friendly for non-text input files, see lesspipe(1)
-[ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
-
-# set variable identifying the chroot you work in (used in the prompt below)
-if [ -z "${debian_chroot:-}" ] && [ -r /etc/debian_chroot ]; then
-    debian_chroot=$(cat /etc/debian_chroot)
-fi
-
-# set a fancy prompt (non-color, unless we know we "want" color)
-case "$TERM" in
-    xterm-color|*-256color) color_prompt=yes;;
-esac
-
-# uncomment for a colored prompt, if the terminal has the capability; turned
-# off by default to not distract the user: the focus in a terminal window
-# should be on the output of commands, not on the prompt
-#force_color_prompt=yes
-
-if [ -n "$force_color_prompt" ]; then
-    if [ -x /usr/bin/tput ] && tput setaf 1 >&/dev/null; then
-	# We have color support; assume it's compliant with Ecma-48
-	# (ISO/IEC-6429). (Lack of such support is extremely rare, and such
-	# a case would tend to support setf rather than setaf.)
-	color_prompt=yes
-    else
-	color_prompt=
-    fi
-fi
-
-if [ "$color_prompt" = yes ]; then
-    PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
-else
-    PS1='${debian_chroot:+($debian_chroot)}\u@\h:\w\$ '
-fi
-unset color_prompt force_color_prompt
-
-# If this is an xterm set the title to user@host:dir
-case "$TERM" in
-xterm*|rxvt*)
-    PS1="\[\e]0;${debian_chroot:+($debian_chroot)}\u@\h: \w\a\]$PS1"
-    ;;
-*)
-    ;;
-esac
-
-# enable color support of ls and also add handy aliases
-if [ -x /usr/bin/dircolors ]; then
-    test -r ~/.dircolors && eval "$(dircolors -b ~/.dircolors)" || eval "$(dircolors -b)"
-    alias ls='ls --color=auto'
-    #alias dir='dir --color=auto'
-    #alias vdir='vdir --color=auto'
-
-    alias grep='grep --color=auto'
-    alias fgrep='fgrep --color=auto'
-    alias egrep='egrep --color=auto'
-fi
-
-# colored GCC warnings and errors
-#export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
-
-# some more ls aliases
-alias ll='ls -alF'
-alias la='ls -A'
-alias l='ls -CF'
-
-# Add an "alert" alias for long running commands.  Use like so:
-#   sleep 10; alert
-alias alert='notify-send --urgency=low -i "$([ $? = 0 ] && echo terminal || echo error)" "$(history|tail -n1|sed -e '\''s/^\s*[0-9]\+\s*//;s/[;&|]\s*alert$//'\'')"'
-
-# Alias definitions.
-# You may want to put all your additions into a separate file like
-# ~/.bash_aliases, instead of adding them here directly.
-# See /usr/share/doc/bash-doc/examples in the bash-doc package.
-
-if [ -f ~/.bash_aliases ]; then
-    . ~/.bash_aliases
-fi
-
-# enable programmable completion features (you don't need to enable
-# this, if it's already enabled in /etc/bash.bashrc and /etc/profile
-# sources /etc/bash.bashrc).
-if ! shopt -oq posix; then
-  if [ -f /usr/share/bash-completion/bash_completion ]; then
-    . /usr/share/bash-completion/bash_completion
-  elif [ -f /etc/bash_completion ]; then
-    . /etc/bash_completion
-  fi
-fi
-
-# --------------------------------------------------------------------------------------------------------------------
-# ------------------------------------------------------ My Def ------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------
-
+# <CSF-S>
 export DAT="/mnt/Storage/Desktop/OSReset/dat";
-
 export STORAGE="/mnt/Storage";
 
 export MASTER="/mnt/Master";
@@ -483,6 +363,7 @@ function install_rust() {
     fi
 }
 
+# shellcheck disable=SC2120
 function install_R() {
 
     trap closing INT TERM EXIT;
@@ -501,23 +382,35 @@ function install_R() {
         "mgcv"
         "faraway"
         "GGally"
-    )
+    );
 
-    updatefix; install_apt "r-base"; Packages+=("$@"); # Append additional packages to the list
+    updatefix; install_apt "r-base"; 
+
+    # Append additional packages if any are passed
+    if [ "$#" -gt 0 ]; then Packages+=("$@"); fi
+
+    # Get the R major and minor version dynamically
+    local R_VERSION=$(R --slave -e 'cat(R.version$major, ".", strsplit(R.version$minor, "\\.")[[1]][1], sep="")');
+
+    # Define the dynamic user library path
+    local LIB="$HOME/R/x86_64-pc-linux-gnu-library/$R_VERSION";
+
+    mkdir -p "$LIB";
 
     for pkg in "${Packages[@]}"; do
 
-        if sudo R --slave -e "repos <- c(CRAN='https://cran.csiro.au'); if (!(\"$pkg\" %in% rownames(available.packages(repos=repos)))) quit(status=1)"; then
+        # Check if the package is available on CRAN
+        if ! sudo R --slave -e "repos <- c(CRAN='https://cran.csiro.au'); if (!(\"$pkg\" %in% rownames(available.packages(repos=repos)))) quit(status=1)"; then
+            echo -e "$pkg is not available on the CRAN repository. Skipping.\n\n"; continue;
+        fi
 
-            if sudo R --slave -e "if (!require('$pkg', quietly = TRUE)) quit(status=1)"; then
-                echo "$pkg is already installed.";
-            else
-                R --slave -e "install.packages('$pkg', repos='https://cran.csiro.au')";
-                echo "$pkg has been installed successfully.";
-            fi
-
-        else 
-            echo "$pkg is not available on the CRAN repository. Skipping.";
+        # Check if the package is already installed
+        if R --slave -e "if (!require('$pkg', quietly = TRUE)) quit(status=1)"; then
+            echo -e "$pkg is already installed.\n\n";
+        else
+            # Install the package to the user library
+            R --slave -e "install.packages('$pkg', repos='https://cran.csiro.au', lib='$LIB')";
+            echo -e "$pkg has been installed successfully.\n\n";
         fi
 
     done
@@ -719,6 +612,107 @@ function convert_to_mp4() {
 
 }
 
+function insert_script() {
+
+    local input="$1";
+    local output="$2";
+    
+    # Check if the input file exists
+    if [ ! -f "$input" ]; then echo "Error: No script source file was provided." >&2; exit 1; fi
+    # Check if the output file exists
+    if [ ! -f "$output" ]; then echo "Error: No output file provided." >&2; exit 1; fi
+
+    local TAGS="# <CSF-S>"; # Custom Shell Function - Start Tag
+    local TAGE="# <CSF-E>"; # Custom Shell Function - End Tag
+    local output_ts output_te input_st input_et;
+
+    # Search for the opening and closing CSF tags in input
+    input_st=$(grep -n "^$TAGS$" "$input" | cut -d: -f1 | head -n1);
+    input_et=$(grep -n "^$TAGE$" "$input" | cut -d: -f1 | tail -n1);
+
+    # Search for the opening and closing CSF tags in output
+    output_ts=$(grep -n "^$TAGS$" "$output" | cut -d: -f1 | head -n1);
+    output_te=$(grep -n "^$TAGE$" "$output" | cut -d: -f1 | tail -n1);
+
+    # Check for missing start tag in input
+    if [ -z "$input_st" ]; then
+        echo "Error: Missing start CSF tag in the input file." >&2; exit 1;
+    fi
+
+    # Check for missing end tag in input
+    if [ -z "$input_et" ]; then
+        echo "Error: Missing end CSF tag in the input file." >&2; exit 1;
+    fi
+
+    # Check if the tags are in the correct order in input
+    if [ "$input_st" -ge "$input_et" ]; then
+        echo "Error: Input file is corrupted. Tags are incorrectly ordered." >&2; exit 1;
+    fi
+
+    # Check for missing start tag in output
+    if [ -n "$output_ts" ] && [ -z "$output_te" ]; then
+        echo "Error: Output file is corrupted. End tag is missing." >&2; exit 1;
+    fi
+    
+    # Check for missing end tag in output
+    if [ -z "$output_ts" ] && [ -n "$output_te" ]; then
+        echo "Error: Output file is corrupted. Start tag is missing." >&2; exit 1;
+    fi
+
+    # Check for both missing tags in output
+    if [ -z "$output_ts" ] && [ -z "$output_te" ]; then
+
+        # Append the CSF tags
+        if ! echo -e "\n$TAGS\n$TAGE" >> "$output"; then
+            echo "Error: Failed to append CSF tags to User .bashrc." >&2; exit 1;
+        fi
+
+        # Update output_ts and output_te after appending tags
+        output_ts=$(grep -n "^$TAGS$" "$output" | cut -d: -f1 | head -n1)
+        output_te=$(grep -n "^$TAGE$" "$output" | cut -d: -f1 | tail -n1)
+        
+    fi
+
+    # Check if the tags are in the correct order in output
+    if [ "$output_ts" -ge "$output_te" ]; then
+        echo "Error: Output file is corrupted. Tags are incorrectly ordered." >&2; exit 1;
+    fi
+
+    # Both tags in the input and output exist and are correctly ordered
+    
+    # Copy the content between the tags from the input
+    local insert=$(sed -n "$((input_st+1)),$((input_et-1))p" "$input");
+
+    # Create a temporary file
+    temp=$(mktemp)
+
+    # Backup the content from (including) the end tag to EOF
+    if ! sed -n "${output_te},\$p" "$output" > "$temp"; then
+        echo "Error: Failed to extract the content after the end tag." >&2; exit 1;
+    fi
+
+    # Remove the existing content from (not including) the start tag to EOF
+    if ! sed -i "$((output_ts+1)),\$d" "$output"; then
+        echo "Error: Failed to remove the existing content below the start tag." >&2; return 1
+    fi
+
+    # Insert the new content below the start tag
+    if ! echo "$insert" >> "$output"; then
+        echo "Error: Failed to insert the new content below the start tag." >&2; exit 1;
+    fi
+
+    # Append the backed up content after the new content
+    if ! cat "$temp" >> "$output"; then
+        echo "Error: Failed to append the backed-up content." >&2; exit 1;
+    fi
+
+    # Clean up temporary file
+    rm -f "$temp";
+
+    echo "Bashrc has been updated successfully.";
+
+}
+
 # --------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------- Setup ------------------------------------------------------
 # --------------------------------------------------------------------------------------------------------------------
@@ -914,7 +908,7 @@ function core_setup() {
 
     # Edge Repository
     echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] \
-    https://packages.microsoft.com/repos/edge stable main" | sudo tee /etc/apt/sources.list.d/edge.list;
+    https://packages.microsoft.com/repos/edge/ stable main" | sudo tee /etc/apt/sources.list.d/microsoft-edge.list;
 
     # Brave Repository
     echo "deb [signed-by=/etc/apt/keyrings/brave-browser-archive-keyring.gpg] \
@@ -957,7 +951,7 @@ function setup_user() {
 
     local auto_start="$DAT/Linux/AutoStart";
 
-    install_rust; install_py;
+    install_rust; install_py; install_R;
 
     install_dpkg "Kuro.deb" "Discord.deb" "Outlook.deb";
 
@@ -1002,19 +996,15 @@ function help() {
 
 # Export common functions for use in subshells
 export -f closing copy_dir change_owner remove_files install_flatpak install_dpkg \
-install_apt updatefix convert_to_mp4 run_py git_login git_commit add_gpg;
+install_apt updatefix convert_to_mp4 run_py git_commit add_gpg;
 
 # Export application installation functions for use in subshells
 export -f install_nordvpn install_rust install_R install_javascript install_py;
 
 # Export setup functions for use in subshells
-export -f get_usb copy_prefs core_setup setup_user help;
+export -f get_usb copy_prefs core_setup setup_user help insert_script;
 
 echo "Welcome to the Linux environment. Type 'help' to see available functions.";
-
-# --------------------------------------------------------------------------------------------------------------------
-# ------------------------------------------------------ My Def ------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------
 
 if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env";  # Source Rust environment
@@ -1037,3 +1027,10 @@ unset __conda_setup
 
 export NVM_DIR="$HOME/.nvm";
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";  # This loads nvm
+# <CSF-E>
+
+# Code below is outside of the CSF tags and will not be included in the bashrc file
+# Code below is outside of the CSF tags and will not be included in the bashrc file
+# Code below is outside of the CSF tags and will not be included in the bashrc file
+
+insert_script "./src/func.sh" "$HOME/.bashrc";
