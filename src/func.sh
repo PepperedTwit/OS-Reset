@@ -338,6 +338,12 @@ function install_rust() {
     fi
 }
 
+function discord() {
+
+    install_dpkg Discord.deb; discord;
+
+}
+
 # shellcheck disable=SC2120
 function install_R() {
 
@@ -523,16 +529,6 @@ function run_py() {
     echo "Packages installed successfully.";
     echo "Deactivating environment '$ENV'.";
     conda deactivate;
-
-}
-
-function git_commit() {
-
-    local MSG="$1"; shift;
-
-    if [ -z "$MSG" ]; then echo "No commit message specified. Exiting."; return 1; fi
-
-    git add .; git commit -m "$MSG"; git push origin main;
 
 }
 
@@ -723,6 +719,23 @@ function insert_script() {
 
 }
 
+function git_update() {
+
+    if [ -z "$1" ]; then echo "No branch specified. Exiting."; return 1; fi
+
+    if [ -z "$2" ]; then echo "No commit message specified. Exiting."; return 1; fi
+
+    local branch msg;
+    branch="$1"; shift; msg="$1";
+
+    if ! git branch -a | grep -qE "(\s|remotes/origin/)$branch$"; then
+        echo "Branch $branch does not exist. Exiting."; return 1; 
+    fi
+
+    git add .; git commit -m "$msg"; git push origin "$branch";
+
+}
+
 function help() {
 
     echo "";
@@ -742,7 +755,7 @@ function help() {
     echo "install_javascript - Install JavaScript packages.";
     echo "run_py - Run Python scripts in a Conda environment. Usage: run_py <environment> <script> [packages]";
     echo "git_login - Set Git user details.";
-    echo "git_commit - Commit changes to Git repository.";
+    echo "git_update - Commit changes to Git repository. Usage: git_update <branch> <message>";
     echo "convert_to_mp4 - Convert video files to MP4 format.";
     echo "copy_prefs - Copy preferences to the user directory.";
     echo "core_setup - Setup core system settings.";
@@ -754,7 +767,7 @@ function help() {
 
 # Export common functions for use in subshells
 export -f closing copy_dir change_owner remove_files install_flatpak install_dpkg \
-install_apt updatefix convert_to_mp4 run_py git_commit add_gpg insert_script;
+install_apt updatefix convert_to_mp4 run_py git_update add_gpg insert_script;
 
 # Export application installation functions for use in subshells
 export -f install_nordvpn install_rust install_R install_javascript install_py;
