@@ -732,6 +732,12 @@ function git_update() {
         echo "Branch $branch does not exist. Exiting."; return 1; 
     fi
 
+    # Confirm push if branch is 'main'
+    if [ "$branch" == "main" ]; then
+        read -p "You are about to push to 'main'. Are you sure? (y/n): " confirm
+        if [ "$confirm" != "y" ]; then echo "Push to 'main' aborted."; return 1; fi
+    fi
+
     git add .; git commit -m "$msg"; git push origin "$branch";
 
 }
