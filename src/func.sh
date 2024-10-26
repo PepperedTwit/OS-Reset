@@ -719,23 +719,24 @@ function insert_script() {
 
 }
 
-function git_update() {
+function git_push() {
 
-    if [ -z "$1" ]; then echo "No branch specified. Exiting."; return 1; fi
-
-    if [ -z "$2" ]; then echo "No commit message specified. Exiting."; return 1; fi
+    if [ $# -eq 0 ]; then echo "No inputs. Usage: git_push <branch> <message>"; return 1;
+    elif [ $# -ge 3 ]; then echo "Too many inputs. Usage: git_push <branch> <message>"; return 1; fi
 
     local branch msg;
-    branch="$1"; shift; msg="$1";
 
-    if ! git branch -a | grep -qE "(\s|remotes/origin/)$branch$"; then
-        echo "Branch $branch does not exist. Exiting."; return 1; 
+    if [ $# -eq 2 ]; then branch="$1"; msg="$2"; else 
+        msg="$1"; branch="$(git branch --show-current)";
     fi
 
-    # Confirm push if branch is 'main'
+    if ! git branch -r | grep -qE "origin/$branch$"; then
+        echo "Remote branch: $branch does not exist. Exiting."; return 1;
+    fi
+
     if [ "$branch" == "main" ]; then
-        read -p "You are about to push to 'main'. Are you sure? (y/n): " confirm
-        if [ "$confirm" != "y" ]; then echo "Push to 'main' aborted."; return 1; fi
+        read -p "You are about to push to the remote main branch. Are you sure? (y/n): " confirm;
+        if [ "$confirm" != "y" ]; then echo "Push to 'main' aborted."; return 1; fi;
     fi
 
     git add .; git commit -m "$msg"; git push origin "$branch";
@@ -761,7 +762,7 @@ function help() {
     echo "install_javascript - Install JavaScript packages.";
     echo "run_py - Run Python scripts in a Conda environment. Usage: run_py <environment> <script> [packages]";
     echo "git_login - Set Git user details.";
-    echo "git_update - Commit changes to Git repository. Usage: git_update <branch> <message>";
+    echo "git_push - Commit changes to Git repository. Usage: git_push <branch> <message>";
     echo "convert_to_mp4 - Convert video files to MP4 format.";
     echo "copy_prefs - Copy preferences to the user directory.";
     echo "core_setup - Setup core system settings.";
@@ -773,7 +774,7 @@ function help() {
 
 # Export common functions for use in subshells
 export -f closing copy_dir change_owner remove_files install_flatpak install_dpkg \
-install_apt updatefix convert_to_mp4 run_py git_update add_gpg insert_script;
+install_apt updatefix convert_to_mp4 run_py git_push add_gpg insert_script;
 
 # Export application installation functions for use in subshells
 export -f install_nordvpn install_rust install_R install_javascript install_py;
