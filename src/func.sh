@@ -286,6 +286,14 @@ function updatefix() {
     
 }
 
+function wonky_graphics() {
+
+    sudo dpkg --add-architecture i386;
+    install_apt libgl1:i386 libglx-mesa0:i386 libdrm2:i386 libx11-6:i386 libxext6:i386;
+    sudo reboot;
+
+}
+
 function install_signal() {
 
     trap closing INT TERM EXIT;
@@ -334,6 +342,8 @@ function install_rust() {
             echo ". \"$HOME/.cargo/env\"" >> ~/.bashrc
             source "$HOME/.cargo/env" # Source rust if needed right away in the script
         fi
+
+        rustup target add x86_64-pc-windows-gnu; # Add Windows target
         
     fi
 }
@@ -344,31 +354,11 @@ function discord() {
 
 }
 
-# shellcheck disable=SC2120
 function install_R() {
 
     trap closing INT TERM EXIT;
 
     echo "WARNING: This script will not work when run from within Cryptomator folder.";
-
-    local Packages=(
-        "languageserver"
-        "rmarkdown"
-        "ggplot2"
-        "cowplot"
-        "effects"
-        "dplyr"
-        "readxl"
-        "broom"
-        "mgcv"
-        "faraway"
-        "GGally"
-    );
-
-    updatefix; install_apt "r-base"; 
-
-    # Append additional packages if any are passed
-    if [ "$#" -gt 0 ]; then Packages+=("$@"); fi
 
     # Get the R major and minor version dynamically
     local R_VERSION=$(R --slave -e 'cat(R.version$major, ".", strsplit(R.version$minor, "\\.")[[1]][1], sep="")');
@@ -376,25 +366,9 @@ function install_R() {
     # Define the dynamic user library path
     local LIB="$HOME/R/x86_64-pc-linux-gnu-library/$R_VERSION";
 
-    mkdir -p "$LIB";
+    updatefix; install_apt "r-base"; mkdir -p "$LIB";
 
-    for pkg in "${Packages[@]}"; do
-
-        # Check if the package is available on CRAN
-        if ! sudo R --slave -e "repos <- c(CRAN='https://cran.csiro.au'); if (!(\"$pkg\" %in% rownames(available.packages(repos=repos)))) quit(status=1)"; then
-            echo -e "$pkg is not available on the CRAN repository. Skipping.\n\n"; continue;
-        fi
-
-        # Check if the package is already installed
-        if R --slave -e "if (!require('$pkg', quietly = TRUE)) quit(status=1)"; then
-            echo -e "$pkg is already installed.\n\n";
-        else
-            # Install the package to the user library
-            R --slave -e "install.packages('$pkg', repos='https://cran.csiro.au', lib='$LIB')";
-            echo -e "$pkg has been installed successfully.\n\n";
-        fi
-
-    done
+    R --slave -e "install.packages('languageserver', repos='https://cran.csiro.au', lib='$LIB')";
     
 }
 
@@ -472,14 +446,14 @@ function install_py() {
 
 }
 
-function run_py() {
+function conda_run() {
 
     trap closing INT TERM EXIT;
 
     local ENV="$1"; shift;
     local FILE="$1"; shift;
 
-    echo "Usage: run_py <environment> <script> [packages]";
+    echo "Usage: conda_run <environment> <script> [packages]";
 
     if [ -z "$ENV" ]; then echo "No environment specified. Exiting."; return 1; fi
 
@@ -743,38 +717,187 @@ function git_push() {
 
 }
 
+function nd_start() {
+
+    local nd mdir model;
+    nd="$HOME/.config/nerd-dictation";
+    mdir="$nd/model";
+
+    if [ ! -d "$nd" ]; then
+
+        pip3 install vosk || { echo "Error: Failed to install vosk"; exit 1; }
+        mkdir -p "$mdir";
+        git clone https://github.com/ideasman42/nerd-dictation.git "$nd";
+
+        echo "Nerd Dictation has been installed successfully."
+
+    fi
+
+    # Download small model if not present
+    if [ ! -d "$mdir/small" ]; then
+        wget https://alphacephei.com/kaldi/models/vosk-model-small-en-us-0.15.zip
+        unzip vosk-model-small-en-us-0.15.zip
+        mv vosk-model-small-en-us-0.15 "$mdir/small"
+
+        echo "The small model has been installed successfully."
+    fi
+
+    # Download large model if not present
+    if [ ! -d "$mdir/large" ]; then
+        wget https://alphacephei.com/kaldi/models/vosk-model-en-us-0.22.zip
+        unzip vosk-model-en-us-0.22.zip
+        mv vosk-model-en-us-0.22 "$mdir/large"
+
+        echo "The large model has been installed successfully."
+    fi
+
+    # Determine which model to use based on the -s argument
+    if [ "$1" == "-s" ]; then
+        model="$mdir/small"
+    else
+        model="$mdir/large"
+    fi
+
+    # Run nerd-dictation with the selected model
+    "$nd/nerd-dictation" begin --vosk-model-dir="$model" &>/dev/null &
+
+}
+
+function nd_end() {
+
+    "$HOME/.config/nerd-dictation/nerd-dictation" end;
+
+}
+
+# Header color, Highlight, Reset for output
+export HCLR="\033[1;34m" HSTL="\033[1m" HRST="\033[0m";  
+
 function help() {
 
-    echo "";
-    echo "Available functions:";
-    echo "closing - Exit the script after user confirmation.";
-    echo "copy_dir - Copy files from source to destination.";
-    echo "remove_files - Remove files from the system.";
-    echo "install_flatpak - Install Flatpak packages.";
-    echo "list_deb - List Debian packages.";
-    echo "install_dpkg - Install Debian packages.";
-    echo "install_apt - Install APT packages.";
-    echo "updatefix - Update and fix broken packages.";
-    echo "install_signal - Install Signal.";
-    echo "install_nordvpn - Install NordVPN.";
-    echo "install_rust - Install Rust.";
-    echo "install_R - Install R packages.";
-    echo "install_javascript - Install JavaScript packages.";
-    echo "run_py - Run Python scripts in a Conda environment. Usage: run_py <environment> <script> [packages]";
-    echo "git_login - Set Git user details.";
-    echo "git_push - Commit changes to Git repository. Usage: git_push <branch> <message>";
-    echo "convert_to_mp4 - Convert video files to MP4 format.";
-    echo "copy_prefs - Copy preferences to the user directory.";
-    echo "core_setup - Setup core system settings.";
-    echo "setup_user - Setup user environment.";
-    echo "help - Display this help message.";
-    echo "";
+    echo -e "\n${HCLR}Available functions:${HRST}"
+    
+    echo -e "${HSTL}closing${HRST} - Exit the script after user confirmation."
+    echo -e "${HSTL}copy_dir${HRST} - Copy files from source to destination."
+    echo -e "${HSTL}remove_files${HRST} - Remove files from the system."
+    echo -e "${HSTL}install_flatpak${HRST} - Install Flatpak packages."
+    echo -e "${HSTL}list_deb${HRST} - List Debian packages."
+    echo -e "${HSTL}install_dpkg${HRST} - Install Debian packages."
+    echo -e "${HSTL}install_apt${HRST} - Install APT packages."
+    echo -e "${HSTL}updatefix${HRST} - Update and fix broken packages."
+    echo -e "${HSTL}wonky_graphics${HRST} - Fix graphics issues by installing 32-bit libraries."
+    echo -e "${HSTL}install_signal${HRST} - Install Signal."
+    echo -e "${HSTL}install_nordvpn${HRST} - Install NordVPN."
+    echo -e "${HSTL}install_rust${HRST} - Install Rust."
+    echo -e "${HSTL}install_R${HRST} - Install R packages."
+    echo -e "${HSTL}install_javascript${HRST} - Install JavaScript packages."
+    echo -e "${HSTL}conda_run${HRST} - Run Python scripts in a Conda environment. Usage: conda_run <environment> <script> [packages]"
+    echo -e "${HSTL}git_login${HRST} - Set Git user details."
+    echo -e "${HSTL}git_push${HRST} - Commit changes to Git repository. Usage: git_push <branch> <message>"
+    echo -e "${HSTL}convert_to_mp4${HRST} - Convert video files to MP4 format."
+    echo -e "${HSTL}copy_prefs${HRST} - Copy preferences to the user directory."
+    echo -e "${HSTL}core_setup${HRST} - Setup core system settings."
+    echo -e "${HSTL}setup_user${HRST} - Setup user environment."
+
+    echo -e "${HSTL}nd_start${HRST} - Start Nerd Dictation."
+    echo -e "${HSTL}nd_end${HRST} - End Nerd Dictation."
+    
+    echo -e "\n${HSTL}help${HRST} - Display this help message."
+    echo -e "${HSTL}help_git${HRST} - Display Git commands."
+    echo -e "${HSTL}help_conda${HRST} - Display Anaconda commands.\n"
+
+}
+
+function git_help() {
+
+    echo -e "\n${HCLR}Git Common Commands:${HRST}"
+    echo -e "Initialize a new repository:                       ${HSTL}git init${HRST}"
+    echo -e "Clone a repository:                                ${HSTL}git clone <url>${HRST}"
+    echo -e "Create a new branch and switch to it:              ${HSTL}git checkout -b <branch>${HRST}"
+    echo -e "Switch to an existing branch:                      ${HSTL}git checkout <branch>${HRST}"
+    echo -e "List all local and remote branches:                ${HSTL}git branch -a${HRST}"
+    echo -e "Delete a local branch:                             ${HSTL}git branch -d <branch>${HRST}"
+    echo -e "Delete a remote branch:                            ${HSTL}git push origin --delete <branch>${HRST}"
+    echo -e "Merge a branch into the current branch:            ${HSTL}git merge <branch>${HRST}"
+
+    echo -e "\n${HCLR}Staging and Committing:${HRST}"
+    echo -e "Stage changes:                                     ${HSTL}git add <file>${HRST} or ${HSTL}git add .${HRST}"
+    echo -e "Commit changes with a message:                     ${HSTL}git commit -m \"message\"${HRST}"
+    echo -e "Amend the last commit:                             ${HSTL}git commit --amend${HRST}"
+    echo -e "Show commit history:                               ${HSTL}git log${HRST}"
+
+    echo -e "\n${HCLR}Remote Commands:${HRST}"
+    echo -e "Push current branch to remote:                     ${HSTL}git push${HRST}"
+    echo -e "Push a specific branch to remote:                  ${HSTL}git push origin <branch>${HRST}"
+    echo -e "Pull latest changes from remote branch:            ${HSTL}git pull origin <branch>${HRST}"
+    echo -e "Fetch updates from remote without merging:         ${HSTL}git fetch${HRST}"
+    echo -e "Add a new remote repository:                       ${HSTL}git remote add <name> <url>${HRST}"
+    echo -e "List all remotes:                                  ${HSTL}git remote -v${HRST}"
+
+    echo -e "\n${HCLR}Undo and Cleanup Commands:${HRST}"
+    echo -e "Discard all local changes:                         ${HSTL}git checkout -- <file>${HRST} or ${HSTL}git reset --hard${HRST}"
+    echo -e "Unstage changes (keep in working directory):       ${HSTL}git reset <file>${HRST}"
+    echo -e "Reset branch to match remote:                      ${HSTL}git reset --hard origin/<branch>${HRST}"
+    echo -e "Remove untracked files and directories:            ${HSTL}git clean -fd${HRST}"
+
+    echo -e "\n${HCLR}Custom Git Commands:${HRST}"
+    echo -e "Set Git user details and personal settings:        ${HSTL}git_login${HRST}"
+    echo -e "Add all, commit, push to the current branch:       ${HSTL}git_push <message>${HRST}"
+    echo -e "Add all, commit, push to a specified branch:       ${HSTL}git_push <branch> <message>${HRST}\n"
+
+}
+
+function conda_help() {
+
+    echo -e "\n${HCLR}Anaconda Env Management:${HRST}";
+    echo -e "List all environments:                             ${HSTL}conda env list${HRST}";
+    echo -e "Create a new environment:                          ${HSTL}conda create --name <env_name>${HRST}";
+    echo -e "Create environment from requirements.yml:          ${HSTL}conda env create -f requirements.yml${HRST}";
+    echo -e "Activate an environment:                           ${HSTL}conda activate <env_name>${HRST}";
+    echo -e "Deactivate current environment:                    ${HSTL}conda deactivate${HRST}";
+    echo -e "Remove an environment:                             ${HSTL}conda env remove --name <env_name>${HRST}";
+    echo -e "Clone an environment:                              ${HSTL}conda create --name <new_env> --clone <existing_env>${HRST}";
+    
+    echo -e "\n${HCLR}Package Management:${HRST}";
+    echo -e "Install a package:                                 ${HSTL}conda install <package_name>${HRST}";
+    echo -e "Install specific version:                          ${HSTL}conda install <package_name>=<version>${HRST}";
+    echo -e "Install multiple packages:                         ${HSTL}conda install <package1> <package2>${HRST}";
+    echo -e "Install from specific channel:                     ${HSTL}conda install -c <channel> <package>${HRST}";
+    echo -e "Update all packages:                               ${HSTL}conda update --all${HRST}";
+    echo -e "Update specific package:                           ${HSTL}conda update <package_name>${HRST}";
+    echo -e "Remove a package:                                  ${HSTL}conda remove <package_name>${HRST}";
+    
+    echo -e "\n${HCLR}Environment Information:${HRST}";
+    echo -e "List packages in current environment:              ${HSTL}conda list${HRST}";
+    echo -e "Search for a package:                              ${HSTL}conda search <package_name>${HRST}";
+    echo -e "Show environment information:                      ${HSTL}conda info${HRST}";
+    echo -e "Export environment to YAML:                        ${HSTL}conda env export > environment.yml${HRST}";
+    echo -e "Show current environment name:                     ${HSTL}echo \$CONDA_DEFAULT_ENV${HRST}";
+    
+    echo -e "\n${HCLR}Maintenance and Updates:${HRST}"
+    echo -e "Clean unused packages and caches:                  ${HSTL}conda clean --all${HRST}";
+    echo -e "Update conda itself:                               ${HSTL}conda update conda${HRST}";
+    echo -e "Update anaconda metapackage:                       ${HSTL}conda update anaconda${HRST}";
+    echo -e "Verify conda installation:                         ${HSTL}conda verify${HRST}";
+    
+    echo -e "\n${HCLR}Pip Integration:${HRST}";
+    echo -e "Install pip in current environment:                ${HSTL}conda install pip${HRST}";
+    echo -e "Install package using pip:                         ${HSTL}pip install <package_name>${HRST}";
+    echo -e "Export pip requirements:                           ${HSTL}pip freeze > requirements.txt${HRST}";
+    
+    echo -e "\n${HCLR}Jupyter Integration:${HRST}";
+    echo -e "Install Jupyter Notebook:                          ${HSTL}conda install jupyter${HRST}";
+    echo -e "Install JupyterLab:                                ${HSTL}conda install jupyterlab${HRST}";
+    echo -e "Launch Jupyter Notebook:                           ${HSTL}jupyter notebook${HRST}";
+    echo -e "Launch JupyterLab:                                 ${HSTL}jupyter lab${HRST}";
+
+    echo -e "\n${HCLR}Custom Conda Commands:${HRST}"
+    echo -e "Run Python scripts in a Conda environment:         ${HSTL}conda_run <environment> <script> [packages]${HRST}\n";
 
 }
 
 # Export common functions for use in subshells
 export -f closing copy_dir change_owner remove_files install_flatpak install_dpkg \
-install_apt updatefix convert_to_mp4 run_py git_push add_gpg insert_script;
+install_apt updatefix convert_to_mp4 conda_run git_push add_gpg insert_script;
 
 # Export application installation functions for use in subshells
 export -f install_nordvpn install_rust install_R install_javascript install_py;
@@ -808,4 +931,3 @@ export NVM_DIR="$HOME/.nvm";
 # Code below is outside of the CSF tags and will not be included in the bashrc file
 # Code below is outside of the CSF tags and will not be included in the bashrc file
 
-insert_script "./src/func.sh" "$HOME/.bashrc" -o;

@@ -11,14 +11,13 @@
 
         // Linux setup
         "terminal.integrated.env.linux": {
-            "UBASH": "./src/func.sh",
             "PRIV": "./src/private.sh",
         },
 
         "terminal.integrated.profiles.linux": {
             "bash": {
                 "path": "bash",
-                "args": ["-c", ". $UBASH && . $PRIV && exec bash -i"]
+                "args": ["-c", ". $PRIV && exec bash -i"]
             }
         },
     }
