@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # <CSF-S>
+
 function closing() {
 
     echo -e "Exiting script. Bash died.";
@@ -446,6 +447,237 @@ function install_py() {
 
 }
 
+function setup_ssh() {
+
+    echo "Checking SSH server status...";
+
+    # Check if SSH server is installed
+    if ! command -v sshd &>/dev/null; then
+
+        echo "SSH server not found. Installing...";
+
+        install_apt "openssh-server";
+
+    fi
+
+    # Check if SSH service is running
+    if ! systemctl is-active --quiet ssh; then
+
+        echo "Starting SSH service..."
+
+        if ! sudo systemctl start ssh; then
+            echo "Failed to start SSH service" >&2; return 1;
+        fi
+
+    fi
+
+    # Enable SSH service on boot if not already enabled
+    if ! systemctl is-enabled --quiet ssh; then
+
+        echo "Enabling SSH service on boot..."
+
+        if ! sudo systemctl enable ssh; then
+            echo "Failed to enable SSH service" >&2; return 1;
+        fi
+
+    fi
+
+    # Get network information
+    local ip_address;
+    ip_address=$(hostname -I | awk '{print $1}');
+    
+    # Display connection info
+    echo -e "\nSSH server setup complete!";
+    echo "Server IP address: ${ip_address}";
+    echo "Default SSH port: 22";
+    echo "Connection string: ssh username@${ip_address}";
+    echo -e "\nTo connect from Windows:";
+    echo "1. Open VSCode";
+    echo "2. Press F1 and type 'Remote-SSH: Connect to Host'";
+    echo "3. Enter: username@${ip_address}";
+
+}
+
+function launch_yubikey_ssh() {
+
+    echo "Initializing SSH and GPG configurations...";
+    local gpg_agent_conf shell_rc auth_key ssh_key pubkey_file;
+
+    # Ensure GPG agent configuration exists and is correct
+    gpg_agent_conf="$HOME/.gnupg/gpg-agent.conf";
+    mkdir -p "$HOME/.gnupg"; chmod 700 "$HOME/.gnupg";
+
+    # Update or add configurations
+    grep -qxF 'enable-ssh-support' "$gpg_agent_conf" || echo 'enable-ssh-support' >> "$gpg_agent_conf";
+    grep -qxF 'default-cache-ttl 60' "$gpg_agent_conf" || echo 'default-cache-ttl 60' >> "$gpg_agent_conf";
+    grep -qxF 'max-cache-ttl 120' "$gpg_agent_conf" || echo 'max-cache-ttl 120' >> "$gpg_agent_conf";
+
+    # Ensure SSH configuration is present in shell startup file
+    case "$SHELL" in
+        */bash) shell_rc="$HOME/.bashrc" ;;
+        */zsh)  shell_rc="$HOME/.zshrc" ;;
+        *)      shell_rc="$HOME/.profile" ;;
+    esac
+
+    echo "Checking GPG SSH environment configuration...";
+    if ! grep -q "GPG_TTY" "$shell_rc"; then
+
+        echo "Adding GPG SSH environment configuration to $shell_rc...";
+
+        {
+            echo ''
+            echo '# Configure GPG SSH agent'
+            echo 'export GPG_TTY=$(tty)'
+            echo 'export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)'
+            echo 'gpgconf --launch gpg-agent'
+        } >> "$shell_rc";
+    fi
+
+    echo "Ensuring GPG SSH environment is properly configured...";
+    export GPG_TTY=$(tty);
+    export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket);
+    gpgconf --launch gpg-agent;
+
+    echo "Testing YubiKey SSH configuration...";
+
+    # Step 1: Check if YubiKey is detected
+    echo -e "\n1. Testing YubiKey detection...";
+    if ! gpg --card-status &>/dev/null; then
+        echo "❌ YubiKey not detected. Please insert your YubiKey and try again."; return 1;
+    fi
+    echo "✓ YubiKey detected";
+
+    # Step 2: Check GPG keys on YubiKey
+    echo -e "\n2. Checking GPG keys on YubiKey...";
+    auth_key=$(gpg --with-colons --card-status | awk -F: '/^fpr:/ {print $4}' | tail -n1);
+
+    if [ -z "$auth_key" ]; then
+        echo "❌ No authentication key found on YubiKey.";
+        echo "Please follow these steps to add an authentication key:";
+        echo "1. Find your key ID with: gpg --list-secret-keys --keyid-format LONG";
+        echo "2. Run: gpg --expert --edit-key YOUR_KEY_ID";
+        echo "3. At the gpg> prompt, type: addkey";
+        echo "4. Choose the appropriate key type (e.g., RSA, ECC)";
+        echo "5. Set capabilities to authentication only";
+        echo "6. Follow the prompts to generate the key";
+        return 1;
+    fi
+    echo "✓ Authentication key found: $auth_key";
+
+    # Step 3: Check GPG agent SSH support
+    echo -e "\n3. Checking GPG agent SSH support...";
+    ssh_socket=$(gpgconf --list-dirs agent-ssh-socket);
+    if [ ! -S "$ssh_socket" ]; then
+        echo "Attempting to restart GPG agent...";
+        gpgconf --kill gpg-agent;
+        gpgconf --launch gpg-agent;
+        if [ ! -S "$ssh_socket" ]; then
+            echo "❌ GPG agent SSH support not properly configured"; return 1;
+        fi
+    fi
+    echo "✓ GPG agent SSH support available";
+
+    # Step 4: Test SSH key availability
+    echo -e "\n4. Testing SSH key availability...";
+    gpg-connect-agent updatestartuptty /bye;
+    sleep 1; # Give the agent a moment to initialize
+
+    # First check if we can get any keys
+    ssh_key=$(ssh-add -L 2>/dev/null | grep "cardno");
+
+    if [ -z "$ssh_key" ]; then
+        # If no key, try restarting the gpg-agent
+        echo "No key found, attempting to restart GPG agent...";
+        gpgconf --kill gpg-agent;
+        gpgconf --launch gpg-agent;
+        sleep 1; # Give the agent a moment to initialize
+        gpg-connect-agent updatestartuptty /bye;
+        
+        # Try getting the key again
+        ssh_key=$(ssh-add -L 2>/dev/null | grep "cardno")
+        if [ -z "$ssh_key" ]; then
+            echo "❌ No SSH key available from YubiKey";
+            echo "Debugging information:";
+            echo "GPG Agent Socket: $(gpgconf --list-dirs agent-ssh-socket)";
+            echo "SSH_AUTH_SOCK: $SSH_AUTH_SOCK"; return 1;
+        fi
+    fi
+    echo "✓ SSH key available from YubiKey";
+
+    # Provide the public key to the user
+    echo -e "\nYour SSH public key (copy this to remote servers):";
+    echo "$ssh_key";
+
+    # Optionally save the public key to a file
+    read -p "Would you like to save the public key to a file? (y/n): " save_key;
+    if [[ "$save_key" =~ ^[Yy]$ ]]; then
+        pubkey_file="$HOME/yubikey_ssh.pub";
+        echo "$ssh_key" > "$pubkey_file";
+        echo "Public key saved to $pubkey_file";
+    fi
+
+    echo -e "\n✓ YubiKey SSH configuration complete!";
+    echo "You can now use your YubiKey for SSH authentication.";
+
+}
+
+function launch_yubikey_ssh_old() {
+    echo "Testing YubiKey SSH configuration..."
+
+    # Step 1: Check if YubiKey is detected
+    echo -e "\n1. Testing YubiKey detection..."
+    if ! gpg --card-status &>/dev/null; then
+        echo "❌ YubiKey not detected. Please insert your YubiKey and try again."
+        return 1
+    fi
+    echo "✓ YubiKey detected"
+
+    # Step 2: Check GPG keys on YubiKey
+    echo -e "\n2. Checking GPG keys on YubiKey..."
+    local auth_key
+    auth_key=$(gpg --card-status | awk '/Authentication key/ {if ($3 != "[none]") print $3}')
+
+    if [ -z "$auth_key" ]; then
+        echo "❌ No authentication key found on YubiKey."
+        echo "You'll need to configure an authentication key before using SSH."
+        echo "Current GPG key capabilities on your YubiKey:"
+        gpg --card-status | grep "Key attributes"
+        return 1
+    fi
+    echo "✓ Authentication key found: $auth_key"
+
+    # Step 3: Check GPG agent SSH support
+    echo -e "\n3. Checking GPG agent SSH support..."
+    if ! gpgconf --list-dirs agent-ssh-socket &>/dev/null; then
+        echo "❌ GPG agent SSH support not properly configured"
+        return 1
+    fi
+    echo "✓ GPG agent SSH support available"
+
+    # Step 4: Test SSH key availability
+    echo -e "\n4. Testing SSH key availability..."
+    if ! ssh-add -L | grep -q "cardno"; then
+        echo "❌ No SSH key available from YubiKey"
+        echo "This might indicate your GPG key doesn't have authentication capability"
+        return 1
+    fi
+    echo "✓ SSH key available from YubiKey"
+
+    # Display detailed key information for reference
+    echo -e "\nGPG Key Details:"
+    gpg --card-status | grep -E "Authentication key|General key info"
+
+    echo -e "\nSSH Public Key (for authorized_keys):"
+    ssh-add -L | grep "cardno"
+
+    echo -e "\n✓ Your YubiKey appears to be correctly configured for SSH!"
+    echo "To use it with VSCode Remote-SSH:"
+    echo "1. Copy the SSH public key shown above"
+    echo "2. Add it to ~/.ssh/authorized_keys on your remote machine"
+    echo "3. Ensure your YubiKey is inserted when connecting"
+    
+}
+
 function conda_run() {
 
     trap closing INT TERM EXIT;
@@ -713,7 +945,8 @@ function git_push() {
         if [ "$confirm" != "y" ]; then echo "Push to 'main' aborted."; return 1; fi;
     fi
 
-    git add .; git commit -m "$msg"; git push origin "$branch";
+    # -S: Signed commit
+    git add .; git commit -S -m "$msg"; git push origin "$branch";
 
 }
 
@@ -779,22 +1012,29 @@ function help() {
     echo -e "${HSTL}closing${HRST} - Exit the script after user confirmation."
     echo -e "${HSTL}copy_dir${HRST} - Copy files from source to destination."
     echo -e "${HSTL}remove_files${HRST} - Remove files from the system."
-    echo -e "${HSTL}install_flatpak${HRST} - Install Flatpak packages."
     echo -e "${HSTL}list_deb${HRST} - List Debian packages."
+
+    echo -e "${HSTL}install_flatpak${HRST} - Install Flatpak packages."
     echo -e "${HSTL}install_dpkg${HRST} - Install Debian packages."
     echo -e "${HSTL}install_apt${HRST} - Install APT packages."
     echo -e "${HSTL}updatefix${HRST} - Update and fix broken packages."
     echo -e "${HSTL}wonky_graphics${HRST} - Fix graphics issues by installing 32-bit libraries."
+
+    echo -e "${HSTL}setup_ssh${HRST} - Install and configure SSH server, displays connection info."
     echo -e "${HSTL}install_signal${HRST} - Install Signal."
     echo -e "${HSTL}install_nordvpn${HRST} - Install NordVPN."
     echo -e "${HSTL}install_rust${HRST} - Install Rust."
+    echo -e "${HSTL}discord${HRST} - Install/Update Discord."
     echo -e "${HSTL}install_R${HRST} - Install R packages."
     echo -e "${HSTL}install_javascript${HRST} - Install JavaScript packages."
     echo -e "${HSTL}conda_run${HRST} - Run Python scripts in a Conda environment. Usage: conda_run <environment> <script> [packages]"
+    
     echo -e "${HSTL}git_login${HRST} - Set Git user details."
     echo -e "${HSTL}git_push${HRST} - Commit changes to Git repository. Usage: git_push <branch> <message>"
+
     echo -e "${HSTL}convert_to_mp4${HRST} - Convert video files to MP4 format."
     echo -e "${HSTL}copy_prefs${HRST} - Copy preferences to the user directory."
+
     echo -e "${HSTL}core_setup${HRST} - Setup core system settings."
     echo -e "${HSTL}setup_user${HRST} - Setup user environment."
 
@@ -925,6 +1165,13 @@ unset __conda_setup
 
 export NVM_DIR="$HOME/.nvm";
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";  # This loads nvm
+
+# Home for public keys
+mkdir -p "$HOME/.ssh/pubkeys/yubikey"
+chmod 700 "$HOME/.ssh"
+chmod 700 "$HOME/.ssh/pubkeys"
+chmod 700 "$HOME/.ssh/pubkeys/yubikey"
+
 # <CSF-E>
 
 # Code below is outside of the CSF tags and will not be included in the bashrc file
