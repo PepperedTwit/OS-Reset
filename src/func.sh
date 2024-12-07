@@ -66,6 +66,52 @@ function remove_files() {
     done
 }
 
+function clear_duplicates() {
+
+    local dir dupe orig dupe_ext orig_ext dupe_size orig_size;
+
+    dir="$PWD";
+
+    if [ ! -d "$dir" ]; then echo "Directory not found. Exiting. Dir: $dir"; return 1; fi
+
+    find "$dir" -path "*/.Trash-1000" -prune -o -path "*/lost+found" -prune -o -type f -print | while read -r dupe; do
+
+        if [ -f "$dupe" ]; then
+
+            if [[ "$dupe" =~ [[:space:]]\([0-9]+\)\. ]] || [[ "$dupe" =~ [[:space:]]Copy\. ]] || [[ "$dupe" =~ [[:space:]]\(copy\)\. ]]; then
+
+                orig="$(echo "$dupe" | sed -E 's/ \([0-9]+\)\././' | sed -E 's/ Copy\./\./' | sed -E 's/ \(copy\)\./\./')";
+
+                # Check if original exists
+                if [ ! -f "$orig" ]; then mv -v "$dupe" "$orig"; continue; fi
+
+                # Check extensions match
+                dupe_ext="${dupe##*.}"
+                orig_ext="${orig##*.}"
+                if [ "$dupe_ext" != "$orig_ext" ]; then continue; fi
+
+                # Compare sizes
+                dupe_size=$(stat -c %s "$dupe")
+                orig_size=$(stat -c %s "$orig")
+                if [ "$dupe_size" != "$orig_size" ]; then continue; fi
+
+                # Compare actual content
+                if ! cmp -s "$dupe" "$orig"; then continue; fi
+
+                if [ -f "$orig" ]; then 
+                    echo "Duplicate: $dupe";
+                    echo "Original: $orig";
+                    gio trash "$dupe"; 
+                fi
+
+            fi
+
+        fi
+
+    done
+
+}
+
 function change_owner() {
 
     trap closing INT TERM EXIT;
@@ -447,6 +493,36 @@ function install_py() {
 
 }
 
+function store_public_key() {
+
+    local key type id key_file timestamp;
+
+    # Required parameters
+    key="$1";                       # The actual public key content
+    type="$2";                  # Type of key (e.g., yubikey, ssh, gpg)
+    id="$3";               # Additional descriptive information
+    
+    # Ensure we have the required parameters
+    if [ -z "$key" ] || [ -z "$type" ] || [ -z "$id" ]; then
+        echo -e "Error: Missing required parameters.\n";
+        if [ -f "$PK_README" ]; then cat "$PK_README"; else
+            echo "Couldn't show README. Not found at $PK_README";
+        fi
+        return 1;
+    fi
+
+    # Generate a filename that includes all relevant information
+    timestamp=$(date +%Y%m%d);
+    key_file="${PUB_KEYS}/${type}_${id}_${timestamp}.pub";
+
+    if ! echo "$key" > "$key_file"; then
+        echo "Failed to save the public key to $key_file"; return 1;
+    else 
+        echo -e "\nPublic key saved to: $key_file"; return 0;
+    fi
+    
+}
+
 function setup_ssh() {
 
     echo "Checking SSH server status...";
@@ -490,18 +566,30 @@ function setup_ssh() {
     echo -e "\nSSH server setup complete!";
     echo "Server IP address: ${ip_address}";
     echo "Default SSH port: 22";
-    echo "Connection string: ssh username@${ip_address}";
+    echo "Connection string: ssh ${USER}@${ip_address}";
     echo -e "\nTo connect from Windows:";
     echo "1. Open VSCode";
     echo "2. Press F1 and type 'Remote-SSH: Connect to Host'";
-    echo "3. Enter: username@${ip_address}";
+    echo "3. Enter: ${USER}@${ip_address}";
 
 }
 
 function launch_yubikey_ssh() {
 
+    function relaunch() {
+    
+        echo "Attempting to restart GPG agent...";
+        gpgconf --kill gpg-agent;
+        gpgconf --launch gpg-agent;
+        sleep 1; # Give the agent a moment to initialize
+        gpg-connect-agent updatestartuptty /bye;
+        if [ ! -S "$SSH_AUTH_SOCK" ]; then 
+            echo "❌ GPG agent SSH support not properly configured"; return 1; 
+        fi
+    }
+
     echo "Initializing SSH and GPG configurations...";
-    local gpg_agent_conf shell_rc auth_key ssh_key pubkey_file;
+    local gpg_agent_conf shell_rc auth_key ssh_key cardno;
 
     # Ensure GPG agent configuration exists and is correct
     gpg_agent_conf="$HOME/.gnupg/gpg-agent.conf";
@@ -566,16 +654,7 @@ function launch_yubikey_ssh() {
 
     # Step 3: Check GPG agent SSH support
     echo -e "\n3. Checking GPG agent SSH support...";
-    ssh_socket=$(gpgconf --list-dirs agent-ssh-socket);
-    if [ ! -S "$ssh_socket" ]; then
-        echo "Attempting to restart GPG agent...";
-        gpgconf --kill gpg-agent;
-        gpgconf --launch gpg-agent;
-        if [ ! -S "$ssh_socket" ]; then
-            echo "❌ GPG agent SSH support not properly configured"; return 1;
-        fi
-    fi
-    echo "✓ GPG agent SSH support available";
+    relaunch; echo "✓ GPG agent SSH support available";    
 
     # Step 4: Test SSH key availability
     echo -e "\n4. Testing SSH key availability...";
@@ -586,15 +665,8 @@ function launch_yubikey_ssh() {
     ssh_key=$(ssh-add -L 2>/dev/null | grep "cardno");
 
     if [ -z "$ssh_key" ]; then
-        # If no key, try restarting the gpg-agent
-        echo "No key found, attempting to restart GPG agent...";
-        gpgconf --kill gpg-agent;
-        gpgconf --launch gpg-agent;
-        sleep 1; # Give the agent a moment to initialize
-        gpg-connect-agent updatestartuptty /bye;
-        
-        # Try getting the key again
-        ssh_key=$(ssh-add -L 2>/dev/null | grep "cardno")
+        relaunch; # Restart GPG agent and try again
+        ssh_key=$(ssh-add -L 2>/dev/null | grep "cardno") # Try getting the key again
         if [ -z "$ssh_key" ]; then
             echo "❌ No SSH key available from YubiKey";
             echo "Debugging information:";
@@ -608,74 +680,13 @@ function launch_yubikey_ssh() {
     echo -e "\nYour SSH public key (copy this to remote servers):";
     echo "$ssh_key";
 
-    # Optionally save the public key to a file
-    read -p "Would you like to save the public key to a file? (y/n): " save_key;
-    if [[ "$save_key" =~ ^[Yy]$ ]]; then
-        pubkey_file="$HOME/yubikey_ssh.pub";
-        echo "$ssh_key" > "$pubkey_file";
-        echo "Public key saved to $pubkey_file";
-    fi
+    # Extract the card number for use as part of the description
+    cardno=$(echo "$ssh_key" | grep -o "cardno:[0-9_]*" | sed 's/:/-/g');
+    store_public_key "$ssh_key" "yubikey" "$cardno";
 
     echo -e "\n✓ YubiKey SSH configuration complete!";
     echo "You can now use your YubiKey for SSH authentication.";
 
-}
-
-function launch_yubikey_ssh_old() {
-    echo "Testing YubiKey SSH configuration..."
-
-    # Step 1: Check if YubiKey is detected
-    echo -e "\n1. Testing YubiKey detection..."
-    if ! gpg --card-status &>/dev/null; then
-        echo "❌ YubiKey not detected. Please insert your YubiKey and try again."
-        return 1
-    fi
-    echo "✓ YubiKey detected"
-
-    # Step 2: Check GPG keys on YubiKey
-    echo -e "\n2. Checking GPG keys on YubiKey..."
-    local auth_key
-    auth_key=$(gpg --card-status | awk '/Authentication key/ {if ($3 != "[none]") print $3}')
-
-    if [ -z "$auth_key" ]; then
-        echo "❌ No authentication key found on YubiKey."
-        echo "You'll need to configure an authentication key before using SSH."
-        echo "Current GPG key capabilities on your YubiKey:"
-        gpg --card-status | grep "Key attributes"
-        return 1
-    fi
-    echo "✓ Authentication key found: $auth_key"
-
-    # Step 3: Check GPG agent SSH support
-    echo -e "\n3. Checking GPG agent SSH support..."
-    if ! gpgconf --list-dirs agent-ssh-socket &>/dev/null; then
-        echo "❌ GPG agent SSH support not properly configured"
-        return 1
-    fi
-    echo "✓ GPG agent SSH support available"
-
-    # Step 4: Test SSH key availability
-    echo -e "\n4. Testing SSH key availability..."
-    if ! ssh-add -L | grep -q "cardno"; then
-        echo "❌ No SSH key available from YubiKey"
-        echo "This might indicate your GPG key doesn't have authentication capability"
-        return 1
-    fi
-    echo "✓ SSH key available from YubiKey"
-
-    # Display detailed key information for reference
-    echo -e "\nGPG Key Details:"
-    gpg --card-status | grep -E "Authentication key|General key info"
-
-    echo -e "\nSSH Public Key (for authorized_keys):"
-    ssh-add -L | grep "cardno"
-
-    echo -e "\n✓ Your YubiKey appears to be correctly configured for SSH!"
-    echo "To use it with VSCode Remote-SSH:"
-    echo "1. Copy the SSH public key shown above"
-    echo "2. Add it to ~/.ssh/authorized_keys on your remote machine"
-    echo "3. Ensure your YubiKey is inserted when connecting"
-    
 }
 
 function conda_run() {
@@ -1002,137 +1013,176 @@ function nd_end() {
 
 }
 
-# Header color, Highlight, Reset for output
-export HCLR="\033[1;34m" HSTL="\033[1m" HRST="\033[0m";  
-
 function help() {
 
-    echo -e "\n${HCLR}Available functions:${HRST}"
-    
-    echo -e "${HSTL}closing${HRST} - Exit the script after user confirmation."
-    echo -e "${HSTL}copy_dir${HRST} - Copy files from source to destination."
-    echo -e "${HSTL}remove_files${HRST} - Remove files from the system."
-    echo -e "${HSTL}list_deb${HRST} - List Debian packages."
+    # Header color, Highlight, Reset for output
+    local HCLR="\033[1;34m" HSTL="\033[1m" HRST="\033[0m";
 
-    echo -e "${HSTL}install_flatpak${HRST} - Install Flatpak packages."
-    echo -e "${HSTL}install_dpkg${HRST} - Install Debian packages."
-    echo -e "${HSTL}install_apt${HRST} - Install APT packages."
-    echo -e "${HSTL}updatefix${HRST} - Update and fix broken packages."
-    echo -e "${HSTL}wonky_graphics${HRST} - Fix graphics issues by installing 32-bit libraries."
+    case "$1" in
+        -gen)
+            echo -e "\n${HCLR}General Utilities:${HRST}"
+            echo -e "${HSTL}closing${HRST} - Exit the script after user confirmation."
+            echo -e "${HSTL}copy_dir${HRST} - Copy files from source to destination."
+            echo -e "${HSTL}remove_files${HRST} - Remove files from the system."
+            echo -e "${HSTL}list_deb${HRST} - List Debian packages."
+            ;;
 
-    echo -e "${HSTL}setup_ssh${HRST} - Install and configure SSH server, displays connection info."
-    echo -e "${HSTL}install_signal${HRST} - Install Signal."
-    echo -e "${HSTL}install_nordvpn${HRST} - Install NordVPN."
-    echo -e "${HSTL}install_rust${HRST} - Install Rust."
-    echo -e "${HSTL}discord${HRST} - Install/Update Discord."
-    echo -e "${HSTL}install_R${HRST} - Install R packages."
-    echo -e "${HSTL}install_javascript${HRST} - Install JavaScript packages."
-    echo -e "${HSTL}conda_run${HRST} - Run Python scripts in a Conda environment. Usage: conda_run <environment> <script> [packages]"
-    
-    echo -e "${HSTL}git_login${HRST} - Set Git user details."
-    echo -e "${HSTL}git_push${HRST} - Commit changes to Git repository. Usage: git_push <branch> <message>"
+        -setup)
+            echo -e "\n${HCLR}Preferences and Setup:${HRST}"
+            echo -e "${HSTL}copy_prefs${HRST} - Copy preferences to the user directory."
+            echo -e "${HSTL}core_setup${HRST} - Setup core system settings."
+            echo -e "${HSTL}setup_user${HRST} - Setup user environment."
+            ;;
 
-    echo -e "${HSTL}convert_to_mp4${HRST} - Convert video files to MP4 format."
-    echo -e "${HSTL}copy_prefs${HRST} - Copy preferences to the user directory."
+        -install)
+            echo -e "\n${HCLR}Installation and Updates:${HRST}"
+            echo -e "${HSTL}install_flatpak${HRST} - Install Flatpak packages."
+            echo -e "${HSTL}install_dpkg${HRST} - Install Debian packages."
+            echo -e "${HSTL}install_apt${HRST} - Install APT packages."
+            echo -e "${HSTL}updatefix${HRST} - Update and fix broken packages."
+            echo -e "${HSTL}wonky_graphics${HRST} - Fix graphics issues by installing 32-bit libraries."
+            echo -e "${HSTL}discord${HRST} - Install/Update Discord."
+            ;;
 
-    echo -e "${HSTL}core_setup${HRST} - Setup core system settings."
-    echo -e "${HSTL}setup_user${HRST} - Setup user environment."
+        -net)
+            echo -e "\n${HCLR}Networking and Communication:${HRST}"
+            echo -e "${HSTL}setup_ssh${HRST} - Install and configure SSH server, displays connection info."
+            echo -e "${HSTL}install_signal${HRST} - Install Signal."
+            echo -e "${HSTL}install_nordvpn${HRST} - Install NordVPN."
+            ;;
 
-    echo -e "${HSTL}nd_start${HRST} - Start Nerd Dictation."
-    echo -e "${HSTL}nd_end${HRST} - End Nerd Dictation."
-    
-    echo -e "\n${HSTL}help${HRST} - Display this help message."
-    echo -e "${HSTL}help_git${HRST} - Display Git commands."
-    echo -e "${HSTL}help_conda${HRST} - Display Anaconda commands.\n"
+        -dev)
+            echo -e "\n${HCLR}Development Tools:${HRST}"
+            echo -e "${HSTL}install_rust${HRST} - Install Rust."
+            echo -e "${HSTL}install_R${HRST} - Install R packages."
+            echo -e "${HSTL}install_javascript${HRST} - Install JavaScript packages."
+            echo -e "${HSTL}conda_run${HRST} - Run Python scripts in a Conda environment. Usage: conda_run <environment> <script> [packages]"
+            ;;
 
-}
+        -media)
+            echo -e "\n${HCLR}Media Tools:${HRST}"
+            echo -e "${HSTL}convert_to_mp4${HRST} - Convert video files to MP4 format."
+            ;;
 
-function git_help() {
+        -nerd)
+            echo -e "\n${HCLR}Nerd Dictation:${HRST}"
+            echo -e "${HSTL}nd_start${HRST} - Start Nerd Dictation."
+            echo -e "${HSTL}nd_end${HRST} - End Nerd Dictation."
+            ;;
 
-    echo -e "\n${HCLR}Git Common Commands:${HRST}"
-    echo -e "Initialize a new repository:                       ${HSTL}git init${HRST}"
-    echo -e "Clone a repository:                                ${HSTL}git clone <url>${HRST}"
-    echo -e "Create a new branch and switch to it:              ${HSTL}git checkout -b <branch>${HRST}"
-    echo -e "Switch to an existing branch:                      ${HSTL}git checkout <branch>${HRST}"
-    echo -e "List all local and remote branches:                ${HSTL}git branch -a${HRST}"
-    echo -e "Delete a local branch:                             ${HSTL}git branch -d <branch>${HRST}"
-    echo -e "Delete a remote branch:                            ${HSTL}git push origin --delete <branch>${HRST}"
-    echo -e "Merge a branch into the current branch:            ${HSTL}git merge <branch>${HRST}"
+        -dict)
+            echo -e "\n${HCLR}Command Dictionary:${HRST}"
+            echo -e "${HSTL}gsettings list-recursively org.nemo${HRST} - Shows all available preferences for Nemo."
+            echo -e "${HSTL}gsettings list-recursively | grep -i <keyword>${HRST} - Search for setting via keyword."
+            echo -e "    ${HSTL}E.g.${HRST} gsettings list-recursively | grep -i \"theme\""
+            echo -e "${HSTL}sudo dpkg --configure -a${HRST} - Fixes interrupted or broken package installations."
+            echo -e "${HSTL}sudo apt update${HRST} - Updates package lists."
+            echo -e "${HSTL}sudo apt upgrade${HRST} - Installs all updates from package lists."
+            echo -e "${HSTL}sudo apt --fix-broken install${HRST} - Fixes dependencies for broken packages."
+            
+            echo -e "\n${HCLR}Flag Dictionary:${HRST}"
+            echo -e "${HSTL}-y${HRST} - Automatically inputs 'Yes' for confirmation prompts."
+            ;;
 
-    echo -e "\n${HCLR}Staging and Committing:${HRST}"
-    echo -e "Stage changes:                                     ${HSTL}git add <file>${HRST} or ${HSTL}git add .${HRST}"
-    echo -e "Commit changes with a message:                     ${HSTL}git commit -m \"message\"${HRST}"
-    echo -e "Amend the last commit:                             ${HSTL}git commit --amend${HRST}"
-    echo -e "Show commit history:                               ${HSTL}git log${HRST}"
+        -git)
+            echo -e "\n${HCLR}Git Common Commands:${HRST}"
+            echo -e "Initialize a new repository:                       ${HSTL}git init${HRST}"
+            echo -e "Clone a repository:                                ${HSTL}git clone <url>${HRST}"
+            echo -e "Create a new branch and switch to it:              ${HSTL}git checkout -b <branch>${HRST}"
+            echo -e "Switch to an existing branch:                      ${HSTL}git checkout <branch>${HRST}"
+            echo -e "List all local and remote branches:                ${HSTL}git branch -a${HRST}"
+            echo -e "Delete a local branch:                             ${HSTL}git branch -d <branch>${HRST}"
+            echo -e "Delete a remote branch:                            ${HSTL}git push origin --delete <branch>${HRST}"
+            echo -e "Merge a branch into the current branch:            ${HSTL}git merge <branch>${HRST}"
 
-    echo -e "\n${HCLR}Remote Commands:${HRST}"
-    echo -e "Push current branch to remote:                     ${HSTL}git push${HRST}"
-    echo -e "Push a specific branch to remote:                  ${HSTL}git push origin <branch>${HRST}"
-    echo -e "Pull latest changes from remote branch:            ${HSTL}git pull origin <branch>${HRST}"
-    echo -e "Fetch updates from remote without merging:         ${HSTL}git fetch${HRST}"
-    echo -e "Add a new remote repository:                       ${HSTL}git remote add <name> <url>${HRST}"
-    echo -e "List all remotes:                                  ${HSTL}git remote -v${HRST}"
+            echo -e "\n${HCLR}Staging and Committing:${HRST}"
+            echo -e "Stage changes:                                     ${HSTL}git add <file>${HRST} or ${HSTL}git add .${HRST}"
+            echo -e "Commit changes with a message:                     ${HSTL}git commit -m \"message\"${HRST}"
+            echo -e "Amend the last commit:                             ${HSTL}git commit --amend${HRST}"
+            echo -e "Show commit history:                               ${HSTL}git log${HRST}"
 
-    echo -e "\n${HCLR}Undo and Cleanup Commands:${HRST}"
-    echo -e "Discard all local changes:                         ${HSTL}git checkout -- <file>${HRST} or ${HSTL}git reset --hard${HRST}"
-    echo -e "Unstage changes (keep in working directory):       ${HSTL}git reset <file>${HRST}"
-    echo -e "Reset branch to match remote:                      ${HSTL}git reset --hard origin/<branch>${HRST}"
-    echo -e "Remove untracked files and directories:            ${HSTL}git clean -fd${HRST}"
+            echo -e "\n${HCLR}Remote Commands:${HRST}"
+            echo -e "Push current branch to remote:                     ${HSTL}git push${HRST}"
+            echo -e "Push a specific branch to remote:                  ${HSTL}git push origin <branch>${HRST}"
+            echo -e "Pull latest changes from remote branch:            ${HSTL}git pull origin <branch>${HRST}"
+            echo -e "Fetch updates from remote without merging:         ${HSTL}git fetch${HRST}"
+            echo -e "Add a new remote repository:                       ${HSTL}git remote add <name> <url>${HRST}"
+            echo -e "List all remotes:                                  ${HSTL}git remote -v${HRST}"
 
-    echo -e "\n${HCLR}Custom Git Commands:${HRST}"
-    echo -e "Set Git user details and personal settings:        ${HSTL}git_login${HRST}"
-    echo -e "Add all, commit, push to the current branch:       ${HSTL}git_push <message>${HRST}"
-    echo -e "Add all, commit, push to a specified branch:       ${HSTL}git_push <branch> <message>${HRST}\n"
+            echo -e "\n${HCLR}Undo and Cleanup Commands:${HRST}"
+            echo -e "Discard all local changes:                         ${HSTL}git checkout -- <file>${HRST} or ${HSTL}git reset --hard${HRST}"
+            echo -e "Unstage changes (keep in working directory):       ${HSTL}git reset <file>${HRST}"
+            echo -e "Reset branch to match remote:                      ${HSTL}git reset --hard origin/<branch>${HRST}"
+            echo -e "Remove untracked files and directories:            ${HSTL}git clean -fd${HRST}"
 
-}
+            echo -e "\n${HCLR}Custom Git Commands:${HRST}"
+            echo -e "Set Git user details and personal settings:        ${HSTL}git_login${HRST}"
+            echo -e "Add all, commit, push to the current branch:       ${HSTL}git_push <message>${HRST}"
+            echo -e "Add all, commit, push to a specified branch:       ${HSTL}git_push <branch> <message>${HRST}\n"
+            ;;
 
-function conda_help() {
+        -conda)
+            echo -e "\n${HCLR}Anaconda Env Management:${HRST}";
+            echo -e "List all environments:                             ${HSTL}conda env list${HRST}";
+            echo -e "Create a new environment:                          ${HSTL}conda create --name <env_name>${HRST}";
+            echo -e "Create environment from requirements.yml:          ${HSTL}conda env create -f requirements.yml${HRST}";
+            echo -e "Activate an environment:                           ${HSTL}conda activate <env_name>${HRST}";
+            echo -e "Deactivate current environment:                    ${HSTL}conda deactivate${HRST}";
+            echo -e "Remove an environment:                             ${HSTL}conda env remove --name <env_name>${HRST}";
+            echo -e "Clone an environment:                              ${HSTL}conda create --name <new_env> --clone <existing_env>${HRST}";
+            
+            echo -e "\n${HCLR}Package Management:${HRST}";
+            echo -e "Install a package:                                 ${HSTL}conda install <package_name>${HRST}";
+            echo -e "Install specific version:                          ${HSTL}conda install <package_name>=<version>${HRST}";
+            echo -e "Install multiple packages:                         ${HSTL}conda install <package1> <package2>${HRST}";
+            echo -e "Install from specific channel:                     ${HSTL}conda install -c <channel> <package>${HRST}";
+            echo -e "Update all packages:                               ${HSTL}conda update --all${HRST}";
+            echo -e "Update specific package:                           ${HSTL}conda update <package_name>${HRST}";
+            echo -e "Remove a package:                                  ${HSTL}conda remove <package_name>${HRST}";
+            
+            echo -e "\n${HCLR}Environment Information:${HRST}";
+            echo -e "List packages in current environment:              ${HSTL}conda list${HRST}";
+            echo -e "Search for a package:                              ${HSTL}conda search <package_name>${HRST}";
+            echo -e "Show environment information:                      ${HSTL}conda info${HRST}";
+            echo -e "Export environment to YAML:                        ${HSTL}conda env export > environment.yml${HRST}";
+            echo -e "Show current environment name:                     ${HSTL}echo \$CONDA_DEFAULT_ENV${HRST}";
+            
+            echo -e "\n${HCLR}Maintenance and Updates:${HRST}"
+            echo -e "Clean unused packages and caches:                  ${HSTL}conda clean --all${HRST}";
+            echo -e "Update conda itself:                               ${HSTL}conda update conda${HRST}";
+            echo -e "Update anaconda metapackage:                       ${HSTL}conda update anaconda${HRST}";
+            echo -e "Verify conda installation:                         ${HSTL}conda verify${HRST}";
+            
+            echo -e "\n${HCLR}Pip Integration:${HRST}";
+            echo -e "Install pip in current environment:                ${HSTL}conda install pip${HRST}";
+            echo -e "Install package using pip:                         ${HSTL}pip install <package_name>${HRST}";
+            echo -e "Export pip requirements:                           ${HSTL}pip freeze > requirements.txt${HRST}";
+            
+            echo -e "\n${HCLR}Jupyter Integration:${HRST}";
+            echo -e "Install Jupyter Notebook:                          ${HSTL}conda install jupyter${HRST}";
+            echo -e "Install JupyterLab:                                ${HSTL}conda install jupyterlab${HRST}";
+            echo -e "Launch Jupyter Notebook:                           ${HSTL}jupyter notebook${HRST}";
+            echo -e "Launch JupyterLab:                                 ${HSTL}jupyter lab${HRST}";
 
-    echo -e "\n${HCLR}Anaconda Env Management:${HRST}";
-    echo -e "List all environments:                             ${HSTL}conda env list${HRST}";
-    echo -e "Create a new environment:                          ${HSTL}conda create --name <env_name>${HRST}";
-    echo -e "Create environment from requirements.yml:          ${HSTL}conda env create -f requirements.yml${HRST}";
-    echo -e "Activate an environment:                           ${HSTL}conda activate <env_name>${HRST}";
-    echo -e "Deactivate current environment:                    ${HSTL}conda deactivate${HRST}";
-    echo -e "Remove an environment:                             ${HSTL}conda env remove --name <env_name>${HRST}";
-    echo -e "Clone an environment:                              ${HSTL}conda create --name <new_env> --clone <existing_env>${HRST}";
-    
-    echo -e "\n${HCLR}Package Management:${HRST}";
-    echo -e "Install a package:                                 ${HSTL}conda install <package_name>${HRST}";
-    echo -e "Install specific version:                          ${HSTL}conda install <package_name>=<version>${HRST}";
-    echo -e "Install multiple packages:                         ${HSTL}conda install <package1> <package2>${HRST}";
-    echo -e "Install from specific channel:                     ${HSTL}conda install -c <channel> <package>${HRST}";
-    echo -e "Update all packages:                               ${HSTL}conda update --all${HRST}";
-    echo -e "Update specific package:                           ${HSTL}conda update <package_name>${HRST}";
-    echo -e "Remove a package:                                  ${HSTL}conda remove <package_name>${HRST}";
-    
-    echo -e "\n${HCLR}Environment Information:${HRST}";
-    echo -e "List packages in current environment:              ${HSTL}conda list${HRST}";
-    echo -e "Search for a package:                              ${HSTL}conda search <package_name>${HRST}";
-    echo -e "Show environment information:                      ${HSTL}conda info${HRST}";
-    echo -e "Export environment to YAML:                        ${HSTL}conda env export > environment.yml${HRST}";
-    echo -e "Show current environment name:                     ${HSTL}echo \$CONDA_DEFAULT_ENV${HRST}";
-    
-    echo -e "\n${HCLR}Maintenance and Updates:${HRST}"
-    echo -e "Clean unused packages and caches:                  ${HSTL}conda clean --all${HRST}";
-    echo -e "Update conda itself:                               ${HSTL}conda update conda${HRST}";
-    echo -e "Update anaconda metapackage:                       ${HSTL}conda update anaconda${HRST}";
-    echo -e "Verify conda installation:                         ${HSTL}conda verify${HRST}";
-    
-    echo -e "\n${HCLR}Pip Integration:${HRST}";
-    echo -e "Install pip in current environment:                ${HSTL}conda install pip${HRST}";
-    echo -e "Install package using pip:                         ${HSTL}pip install <package_name>${HRST}";
-    echo -e "Export pip requirements:                           ${HSTL}pip freeze > requirements.txt${HRST}";
-    
-    echo -e "\n${HCLR}Jupyter Integration:${HRST}";
-    echo -e "Install Jupyter Notebook:                          ${HSTL}conda install jupyter${HRST}";
-    echo -e "Install JupyterLab:                                ${HSTL}conda install jupyterlab${HRST}";
-    echo -e "Launch Jupyter Notebook:                           ${HSTL}jupyter notebook${HRST}";
-    echo -e "Launch JupyterLab:                                 ${HSTL}jupyter lab${HRST}";
+            echo -e "\n${HCLR}Custom Conda Commands:${HRST}"
+            echo -e "Run Python scripts in a Conda environment:         ${HSTL}conda_run <environment> <script> [packages]${HRST}\n";
+            ;;
 
-    echo -e "\n${HCLR}Custom Conda Commands:${HRST}"
-    echo -e "Run Python scripts in a Conda environment:         ${HSTL}conda_run <environment> <script> [packages]${HRST}\n";
-
+        *)
+            # Default help message
+            echo -e "\n${HCLR}Available Sections (Use -<flag> to view details):${HRST}"
+            echo -e "${HSTL}-gen${HRST}         General utilities and system setup commands."
+            echo -e "${HSTL}-setup${HRST}       User preferences and environment setup."
+            echo -e "${HSTL}-install${HRST}     Installation and update commands."
+            echo -e "${HSTL}-net${HRST}         Networking and communication tools."
+            echo -e "${HSTL}-dev${HRST}         Development tools and programming utilities."
+            echo -e "${HSTL}-media${HRST}       Media processing commands."
+            echo -e "${HSTL}-nerd${HRST}        Nerd Dictation setup and commands."
+            echo -e "${HSTL}-dict${HRST}        Command and flag dictionary."
+            echo -e "${HSTL}-git${HRST}         Git commands and utilities."
+            echo -e "${HSTL}-conda${HRST}       Anaconda commands and utilities.\n"
+            ;;
+    esac
 }
 
 # Export common functions for use in subshells

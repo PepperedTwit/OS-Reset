@@ -6,9 +6,6 @@
     ],
     "settings": {
 
-        // Windows setup
-        "terminal.integrated.defaultProfile.windows": "Git Bash",
-
         // Linux setup
         "terminal.integrated.env.linux": {
             "PRIV": "./src/private.sh",
@@ -20,6 +17,23 @@
                 "args": ["-c", ". $PRIV && exec bash -i"]
             }
         },
+
+        "terminal.integrated.env.windows": {
+            "FUNC": ".\\src\\func.psm1",
+            "DIR": "Documents\\PowerShell\\Modules\\Func"
+        },
+
+        "terminal.integrated.defaultProfile.windows": "Git Bash",
+
+        "terminal.integrated.profiles.windows": {
+            "PowerShell": {
+                "source": "PowerShell",
+                "args": ["-NoExit", "-Command", 
+                    "$mpath = Join-Path $env:USERPROFILE $env:DIR; New-Item -ItemType Directory -Force $mpath; Copy-Item -Force $env:FUNC \"$mpath\\func.psm1\"; Import-Module $mpath\\func.psm1 -Force -Verbose"
+                ]
+            },
+        }
+
     }
 }
 
