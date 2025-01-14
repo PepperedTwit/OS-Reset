@@ -1,19 +1,362 @@
 #!/bin/bash
 
+# Code above is outside of the CSF tags and will not be included in the inserted file
+# Code above is outside of the CSF tags and will not be included in the inserted file
+# Code above is outside of the CSF tags and will not be included in the inserted file
+
 # <CSF-S>
+
+# CORE FUNCTIONS
+
+function insert_script() {
+
+    trap closing INT TERM EXIT;
+
+    local write_type input output insert;
+
+    while [ "$1" != "" ]; do
+
+        case "$1" in
+            -a | -o) 
+                if [ -z "$write_type" ]; then write_type="$1"; else 
+                    echo "Error: Too many write types provided." >&2; exit 1;
+                fi
+            ;;
+            *) 
+                if [ -f "$1" ]; then
+
+                    if [ -z "$input" ]; then input="$1";
+
+                    elif [ -z "$output" ]; then output="$1"; else 
+                        echo "Error: Too many files provided." >&2; exit 1;
+                    fi
+
+                fi
+            ;;
+        esac
+        shift;
+    done
+
+    # Check if the write flag was provided
+    if [ -z "$write_type" ]; then echo "Error: No valid write flag was provided. Use [-a, -o]" >&2; exit 1; fi
+
+    # Check if the input file exists
+    if [ ! -f "$input" ]; then echo "Error: No script source file was provided." >&2; exit 1; fi
+
+    # Check if the output file exists
+    if [ ! -f "$output" ]; then echo "Error: No output file provided." >&2; exit 1; fi
+
+    local TAGS="# <CSF-S>"; # Custom Shell Function - Start Tag
+    local TAGE="# <CSF-E>"; # Custom Shell Function - End Tag
+    local output_ts output_te input_st input_et;
+
+    # Search for the opening and closing CSF tags in input
+    input_st=$(grep -n "^$TAGS$" "$input" | cut -d: -f1 | head -n1);
+    input_et=$(grep -n "^$TAGE$" "$input" | cut -d: -f1 | tail -n1);
+
+    # Search for the opening and closing CSF tags in output
+    output_ts=$(grep -n "^$TAGS$" "$output" | cut -d: -f1 | head -n1);
+    output_te=$(grep -n "^$TAGE$" "$output" | cut -d: -f1 | tail -n1);
+
+    # Check for missing start tag in input
+    if [ -z "$input_st" ]; then
+        echo "Error: Missing start CSF tag in the input file." >&2; exit 1;
+    fi
+
+    # Check for missing end tag in input
+    if [ -z "$input_et" ]; then
+        echo "Error: Missing end CSF tag in the input file." >&2; exit 1;
+    fi
+
+    # Check if the tags are in the correct order in input
+    if [ "$input_st" -ge "$input_et" ]; then
+        echo "Error: Input file is corrupted. Tags are incorrectly ordered." >&2; exit 1;
+    fi
+
+    # Check for missing start tag in output
+    if [ -n "$output_ts" ] && [ -z "$output_te" ]; then
+        echo "Error: Output file is corrupted. End tag is missing." >&2; exit 1;
+    fi
+    
+    # Check for missing end tag in output
+    if [ -z "$output_ts" ] && [ -n "$output_te" ]; then
+        echo "Error: Output file is corrupted. Start tag is missing." >&2; exit 1;
+    fi
+
+    # Check for both missing tags in output
+    if [ -z "$output_ts" ] && [ -z "$output_te" ]; then
+
+        # Append the CSF tags
+        if ! echo -e "\n$TAGS\n$TAGE" >> "$output"; then
+            echo "Error: Failed to append CSF tags to User .bashrc." >&2; exit 1;
+        fi
+
+        # Update output_ts and output_te after appending tags
+        output_ts=$(grep -n "^$TAGS$" "$output" | cut -d: -f1 | head -n1)
+        output_te=$(grep -n "^$TAGE$" "$output" | cut -d: -f1 | tail -n1)
+        
+    fi
+
+    # Check if the tags are in the correct order in output
+    if [ "$output_ts" -ge "$output_te" ]; then
+        echo "Error: Output file is corrupted. Tags are incorrectly ordered." >&2; exit 1;
+    fi
+
+    # Both tags in the input and output exist and are correctly ordered
+
+    middle=$(mktemp); bottom=$(mktemp); 
+
+    # Backup the content between the tags from the output
+    if ! sed -n "$((output_ts+1)),$((output_te-1))p" "$output" > "$middle"; then
+        echo "Error: Failed to extract the content between the tags." >&2; exit 1;
+    fi
+
+    # Backup the content from the end tag to EOF
+    if ! sed -n "$output_te,\$p" "$output" > "$bottom"; then
+        echo "Error: Failed to extract the content after the end tag." >&2; exit 1;
+    fi
+
+    # Remove the existing content from (not including) the start tag to EOF
+    if ! sed -i "$((output_ts+1)),\$d" "$output"; then
+        echo "Error: Failed to remove the existing content below the start tag." >&2; return 1
+    fi
+
+    insert=$(sed -n "$((input_st+1)),$((input_et-1))p" "$input");
+
+    if [ "$write_type" == "-a" ]; then echo "$insert" >> "$middle";
+
+    elif [ "$write_type" == "-o" ]; then echo "$insert" > "$middle"; fi 
+
+    # Insert the new content below the start tag
+    if ! cat "$middle" >> "$output"; then
+        echo "Error: Failed to insert the new content below the start tag." >&2; exit 1;
+    fi
+
+    # Append the backed up content after the new content
+    if ! cat "$bottom" >> "$output"; then
+        echo "Error: Failed to append the backed-up content." >&2; exit 1;
+    fi
+
+    # Clean up temporary files
+    rm -f "$middle" "$bottom";
+
+    echo "Bashrc has been updated successfully.";
+
+}
+
+function emsg() {
+
+    if [ $# -eq 0 ]; then echo -e "\n\tERROR - No error message given...\n"; exec bash; fi
+
+    echo -e "\n\t\tError - $1\n";
+
+    if [ "$2" == "-Exit" ]; then exec bash; fi
+
+}
 
 function closing() {
 
-    echo -e "Exiting script. Bash died.";
+    echo -e "\n\nExiting script. Bash died.\n\n";
+    exec bash;
 
-    while true; do
-        read -r -p "Type 'Close' to exit: " input
-        if [ "$input" = "Close" ]; then
-            echo -e "\n"; exec bash;
-        else
-            echo "Invalid input. Please type 'Close' to exit.";
+}
+
+function check_disk() {
+    
+    if [ -z "$1" ]; then emsg "No disk name provided" -Exit; fi
+
+    ls /dev/disk/by-label/* 2>/dev/null | grep -q "$1" ||
+    ls /dev/disk/by-partlabel/* 2>/dev/null | grep -q "$1";
+
+}
+
+function startup_log() {
+
+    local pdir="/run/user/$(id -u)";
+
+    xed "$pdir/profile_startup.log";
+
+}
+
+function updatefix() {
+
+    trap closing INT TERM EXIT;
+
+    # Update the package lists
+    if ! sudo apt update; then echo "Failed to update package lists"; exit 1; fi
+
+    echo "Package lists updated successfully."
+
+    # Fix broken updates
+    if ! sudo dpkg --configure -a; then echo "Failed to configure packages"; exit 1; fi
+
+    echo "Packages configured successfully."
+
+    # Attempt to fix any broken dependencies
+    if ! sudo apt --fix-broken install -y; then echo "Failed to fix broken dependencies."; exit 1; fi
+
+    echo "Broken dependencies fixed successfully."
+
+    # Install updates
+    if ! sudo apt upgrade -y; then echo "Failed to install updates"; exit 1; fi
+
+    echo "Updates installed successfully."
+
+    # Remove unnecessary packages
+    if ! sudo apt autoremove -y; then echo "Failed to remove unnecessary packages"; exit 1; fi
+
+    echo "Unnecessary packages removed successfully."
+
+    # Clean up the package cache
+    if ! sudo apt clean; then echo "Failed to clean up the package cache"; exit 1; fi
+
+    echo "Package cache cleaned successfully."
+
+    echo "System updated and broken packages fixed successfully."
+    
+}
+
+function add_gpg() {
+
+    # Expects input in the form of "URL1 keyring_name1.gpg" "URL2 keyring_name2.gpg" ...
+    # Packages signed by keys needed to be pointed correctly to /etc/apt/keyrings when 
+    # using this function.
+
+    trap closing INT TERM EXIT;
+
+    if [ $# -eq 0 ]; then echo "No keys were specified. Exiting."; exit 1; fi
+
+    if [ ! -d "/etc/apt/keyrings" ]; then sudo mkdir -p "/etc/apt/keyrings"; fi
+
+    for arg in "$@"; do
+
+        read -r address keyring <<< "$arg";
+
+        if [ -z "$address" ] || [ -z "$keyring" ]; then echo "Invalid argument: $arg"; exit 1; fi
+
+        if [ -e "/etc/apt/keyrings/$keyring" ]; then echo "$keyring already exists. Skipping."; continue; fi
+
+        # Download and dearmor the key, writing the output to a temporary file
+        if ! curl -fsSL "$address" | gpg --dearmor -o "$keyring"; then
+            echo "Failed to download and dearmor $keyring. Exiting."; 
+            rm -f "$keyring"; exit 1;
+        else 
+            echo "$keyring has been added successfully.";
+        fi
+
+        # Install the key with correct permissions and ownership
+        if ! sudo install -D -o root -g root -m 644 "$keyring" "/etc/apt/keyrings/$keyring"; then
+            echo "Failed to install $keyring. Exiting."; rm -f "$keyring"; exit 1;
+        else 
+            rm -f "$keyring"; echo "$keyring has been added successfully.";
+        fi
+
+    done
+
+}
+
+function code() {
+
+    code --password-store="gnome-libsecret"
+
+}
+
+function install_apt() {
+
+    trap closing INT TERM EXIT;
+
+    if [ $# -eq 0 ]; then echo "No package specified. Exiting."; exit 1; fi
+
+    sudo apt-get update; # Update the package lists
+
+    for pkg in "$@"; do
+    
+        if ! dpkg -s "$pkg" &> /dev/null; then
+
+            if ! sudo apt-get install "$pkg" -y; then
+
+                # Update the package lists
+                if ! sudo apt-get update; then
+                    echo "Failed to update package lists"; exit 1;
+                fi
+
+                # Fix broken updates
+                if ! sudo dpkg --configure -a; then
+                    echo "Failed to configure packages"; exit 1;
+                fi
+
+                # Attempt to fix any broken dependencies
+                if ! sudo apt-get --fix-broken install -y; then
+                    echo "Failed to fix broken dependencies."; exit 1;
+                fi
+
+                # Retry installing the package
+                if ! sudo apt-get install "$pkg" -y; then
+                    echo "Failed to install $pkg. Exiting."; exit 1;
+                fi
+
+            fi
+
+            echo "$pkg has been successfully installed.";
+
+        else 
+            echo "$pkg is already installed."
         fi
     done
+}
+
+function install_flatpak() {
+
+    trap closing INT TERM EXIT;
+    
+    if [ $# -eq 0 ]; then emsg "No Flatpak specified. Exiting."; return 1; fi
+
+    install_apt "flatpak"; # Install Flatpak if not already installed
+
+    for pkg in "$@"; do
+
+        while ! flatpak list | grep -q "$pkg"; do
+
+            echo "Attempting to install $pkg..."
+
+            if ! flatpak install --assumeyes flathub "$pkg"; then
+                echo "Installation failed, retrying in 5 seconds..."; sleep 5
+            fi
+
+        done
+
+        echo "$pkg has been installed successfully.";
+
+    done
+}
+
+function setup_autostart_app() {
+
+    local app_name exec_command autostart_file;
+    app_name="$1"; exec_command="$2";
+    autostart_file="$HOME/.config/autostart/$app_name.desktop";
+
+    if [ -z "$app_name" ] || [ -z "$exec_command" ]; then
+        echo "Error: Both app_name and exec_command are required."; return 1;
+    fi
+
+    mkdir -p "$HOME/.config/autostart" || {
+        emsg "Failed to create autostart directory. Exiting." -Exit;
+    }
+
+    {
+
+        echo "[Desktop Entry]";
+        echo "Type=Application";
+        echo "Name=$app_name";
+        echo "Exec=$exec_command";
+        echo "X-GNOME-Autostart-enabled=true";
+
+    } > "$autostart_file" || {
+        emsg "Failed to create autostart entry for $app_name. Exiting." -Exit;
+    }
+
+    echo "Autostart entry for $app_name created at $autostart_file";
 
 }
 
@@ -68,47 +411,44 @@ function remove_files() {
 
 function clear_duplicates() {
 
-    local dir dupe orig dupe_ext orig_ext dupe_size orig_size;
+    if [ ! -f "$HOME/dupe_killer" ]; then copy_prefs; fi
 
-    dir="$PWD";
+    "./$HOME/dupe_killer" "-F" "$PWD";
 
-    if [ ! -d "$dir" ]; then echo "Directory not found. Exiting. Dir: $dir"; return 1; fi
+}
 
-    find "$dir" -path "*/.Trash-1000" -prune -o -path "*/lost+found" -prune -o -type f -print | while read -r dupe; do
+function make_user_dir() {
 
-        if [ -f "$dupe" ]; then
+    trap closing INT TERM EXIT;
 
-            if [[ "$dupe" =~ [[:space:]]\([0-9]+\)\. ]] || [[ "$dupe" =~ [[:space:]]Copy\. ]] || [[ "$dupe" =~ [[:space:]]\(copy\)\. ]]; then
+    if [ $# -eq 0 ]; then emsg "No directory specified." -Exit; fi
+    
+    local dir; dir="$1";
+    local user; user="$(whoami)";
 
-                orig="$(echo "$dupe" | sed -E 's/ \([0-9]+\)\././' | sed -E 's/ Copy\./\./' | sed -E 's/ \(copy\)\./\./')";
+    if [ -f "$dir" ]; then emsg "$dir exists but is a file, not a directory." -Exit; fi
 
-                # Check if original exists
-                if [ ! -f "$orig" ]; then mv -v "$dupe" "$orig"; continue; fi
+    if [ ! -d "$dir" ]; then
 
-                # Check extensions match
-                dupe_ext="${dupe##*.}"
-                orig_ext="${orig##*.}"
-                if [ "$dupe_ext" != "$orig_ext" ]; then continue; fi
+        mkdir -p "$dir" || {
+            echo "Retry with elevated permissions..."; 
+            sudo mkdir -p "$dir" || {
+                emsg "Failed to create $dir with sudo." -Exit;
+            }
+        }
 
-                # Compare sizes
-                dupe_size=$(stat -c %s "$dupe")
-                orig_size=$(stat -c %s "$orig")
-                if [ "$dupe_size" != "$orig_size" ]; then continue; fi
+    fi
 
-                # Compare actual content
-                if ! cmp -s "$dupe" "$orig"; then continue; fi
+    if [ "$(stat -c '%U' "$dir")" != "$user" ]; then
 
-                if [ -f "$orig" ]; then 
-                    echo "Duplicate: $dupe";
-                    echo "Original: $orig";
-                    gio trash "$dupe"; 
-                fi
+        chown -R "$user":"$user" "$dir" || {
+            echo "Retry with elevated permissions...";
+            sudo chown -R "$user":"$user" "$dir" || {
+                emsg "Failed to change ownership of $dir." -Exit;
+            }
+        }
 
-            fi
-
-        fi
-
-    done
+    fi
 
 }
 
@@ -116,12 +456,14 @@ function change_owner() {
 
     trap closing INT TERM EXIT;
 
+    local IFS owner_group user group c_owner c_group;
+
     if [ $# -lt 2 ]; then 
         echo "Usage: change_owner <owner>:<group> <file1> [file2] ..."
         echo "Less than 2 arguments were given. Exiting."; exit 1; 
     fi
 
-    local owner_group="$1"; local IFS; shift;
+    owner_group="$1"; shift;
 
     if ! IFS=":" read -r user group <<< "$owner_group"; then echo "Failed to read the owner and group. Exiting."; exit 1; fi
     if ! id "$user" &>/dev/null; then echo "User $user does not exist. Exiting."; exit 1; fi
@@ -132,8 +474,8 @@ function change_owner() {
         if [ ! -e "$file" ] && [ ! -L "$file" ]; then echo "$file does not exist. Skipping."; exit 1; fi
 
         # Check current owner and group
-        local c_owner=$(stat -c '%U' "$file");
-        local c_group=$(stat -c '%G' "$file");
+        c_owner=$(stat -c '%U' "$file");
+        c_group=$(stat -c '%G' "$file");
 
         if [ "$c_owner" = "$user" ] && [ "$c_group" = "$group" ]; then
             echo "$file is already owned by $user:$group. Skipping."; continue;
@@ -148,42 +490,50 @@ function change_owner() {
 
 }
 
-function install_flatpak() {
+function setup_autostart_app() {
 
-    trap closing INT TERM EXIT;
-    
-    if [ $# -eq 0 ]; then
-        echo "No Flatpak specified. Exiting."; return 1;
+    local app_name exec_command autostart_file;
+    app_name="$1"; exec_command="$2";
+    autostart_file="$HOME/.config/autostart/$app_name.desktop";
+
+    if [ -z "$app_name" ] || [ -z "$exec_command" ]; then
+        echo "Error: Both app_name and exec_command are required."; return 1;
     fi
 
-    for pkg in "$@"; do
+    mkdir -p "$HOME/.config/autostart" || {
+        emsg "Failed to create autostart directory. Exiting." -Exit;
+    }
 
-        if flatpak list | grep -q "$pkg"; then
-            echo "$pkg is already installed."; continue;
-        fi
+    {
 
-        if ! flatpak install --assumeyes flathub "$pkg"; then
-            echo "Failed to install $pkg. Exiting."; exit 1;
-        else
-            echo "$pkg has been installed successfully.";
-        fi
-    done
+        echo "[Desktop Entry]";
+        echo "Type=Application";
+        echo "Name=$app_name";
+        echo "Exec=$exec_command";
+        echo "X-GNOME-Autostart-enabled=true";
+
+    } > "$autostart_file" || {
+        emsg "Failed to create autostart entry for $app_name. Exiting." -Exit;
+    }
+
+    echo "Autostart entry for $app_name created at $autostart_file";
+
 }
 
 function install_dpkg() {
 
-    trap closing INT TERM EXIT RETURN;
+    trap closing INT TERM EXIT;
 
-    if [ $# -eq 0 ]; then echo "No package specified. Exiting."; exit 1; fi
+    if [ $# -eq 0 ]; then emsg "No package specified." -Exit; fi
 
-    local apps="./dat/Linux/Apps";
+    local path name;
 
     for pkg in "$@"; do
 
-        local path="$apps/$pkg";
-        local name=$(basename "$pkg" .deb);
+        path="$OSRESET/dat/Linux/Apps/$pkg";
+        name=$(basename "$pkg" .deb);
 
-        if ! [ -e "$path" ]; then echo "$pkg does not exist. Exiting."; exit 1; fi
+        if ! [ -e "$path" ]; then emsg "$pkg does not exist." -Exit; fi
 
         # -i: Install the package.
         # -E: Skip packages whose same version is installed.
@@ -193,144 +543,23 @@ function install_dpkg() {
 
             # Fix broken updates
             if ! sudo dpkg --configure -a; then
-                echo "Failed to configure packages"; exit 1;
+                emsg "Failed to configure packages" -Exit;
             fi
 
             # Attempt to fix any broken dependencies
             if ! sudo apt-get --fix-broken install -y; then
-                echo "Failed to fix broken dependencies."; exit 1;
+                emsg "Failed to fix broken dependencies." -Exit;
             fi
 
             # Retry installing the package
             if ! sudo dpkg -i -E -G "$path"; then
-                echo "Failed to install $pkg. Exiting."; exit 1;
+                emsg "Failed to install $pkg. Skipping.";
             fi
 
         fi
 
     done
 
-}
-
-function install_apt() {
-
-    trap closing INT TERM EXIT;
-
-    if [ $# -eq 0 ]; then echo "No package specified. Exiting."; exit 1; fi
-
-    sudo apt-get update; # Update the package lists
-
-    for pkg in "$@"; do
-    
-        if ! dpkg -s "$pkg" &> /dev/null; then
-
-            if ! sudo apt-get install "$pkg" -y; then
-
-                # Update the package lists
-                if ! sudo apt-get update; then
-                    echo "Failed to update package lists"; exit 1;
-                fi
-
-                # Fix broken updates
-                if ! sudo dpkg --configure -a; then
-                    echo "Failed to configure packages"; exit 1;
-                fi
-
-                # Attempt to fix any broken dependencies
-                if ! sudo apt-get --fix-broken install -y; then
-                    echo "Failed to fix broken dependencies."; exit 1;
-                fi
-
-                # Retry installing the package
-                if ! sudo apt-get install "$pkg" -y; then
-                    echo "Failed to install $pkg. Exiting."; exit 1;
-                fi
-
-            fi
-
-            echo "$pkg has been successfully installed.";
-
-        else 
-            echo "$pkg is already installed."
-        fi
-    done
-}
-
-function add_gpg() {
-
-    # Expects input in the form of "URL1 keyring_name1.gpg" "URL2 keyring_name2.gpg" ...
-    # Packages signed by keys needed to be pointed correctly to /etc/apt/keyrings when 
-    # using this function.
-
-    trap closing INT TERM EXIT;
-
-    if [ $# -eq 0 ]; then echo "No keys were specified. Exiting."; exit 1; fi
-
-    if [ ! -d "/etc/apt/keyrings" ]; then sudo mkdir -p "/etc/apt/keyrings"; fi
-
-    for arg in "$@"; do
-
-        read -r address keyring <<< "$arg";
-
-        if [ -z "$address" ] || [ -z "$keyring" ]; then echo "Invalid argument: $arg"; exit 1; fi
-
-        if [ -e "/etc/apt/keyrings/$keyring" ]; then echo "$keyring already exists. Skipping."; continue; fi
-
-        # Download and dearmor the key, writing the output to a temporary file
-        if ! curl -fsSL "$address" | gpg --dearmor -o "$keyring"; then
-            echo "Failed to download and dearmor $keyring. Exiting."; 
-            rm -f "$keyring"; exit 1;
-        else 
-            echo "$keyring has been added successfully.";
-        fi
-
-        # Install the key with correct permissions and ownership
-        if ! sudo install -D -o root -g root -m 644 "$keyring" "/etc/apt/keyrings/$keyring"; then
-            echo "Failed to install $keyring. Exiting."; rm -f "$keyring"; exit 1;
-        else 
-            rm -f "$keyring"; echo "$keyring has been added successfully.";
-        fi
-
-    done
-
-}
-
-function updatefix() {
-
-    trap closing INT TERM EXIT;
-
-    # Update the package lists
-    if ! sudo apt update; then echo "Failed to update package lists"; exit 1; fi
-
-    echo "Package lists updated successfully."
-
-    # Fix broken updates
-    if ! sudo dpkg --configure -a; then echo "Failed to configure packages"; exit 1; fi
-
-    echo "Packages configured successfully."
-
-    # Attempt to fix any broken dependencies
-    if ! sudo apt --fix-broken install -y; then echo "Failed to fix broken dependencies."; exit 1; fi
-
-    echo "Broken dependencies fixed successfully."
-
-    # Install updates
-    if ! sudo apt upgrade -y; then echo "Failed to install updates"; exit 1; fi
-
-    echo "Updates installed successfully."
-
-    # Remove unnecessary packages
-    if ! sudo apt autoremove -y; then echo "Failed to remove unnecessary packages"; exit 1; fi
-
-    echo "Unnecessary packages removed successfully."
-
-    # Clean up the package cache
-    if ! sudo apt clean; then echo "Failed to clean up the package cache"; exit 1; fi
-
-    echo "Package cache cleaned successfully."
-
-    echo "System updated and broken packages fixed successfully."
-    
 }
 
 function wonky_graphics() {
@@ -397,7 +626,7 @@ function install_rust() {
 
 function discord() {
 
-    install_dpkg Discord.deb; discord;
+    install_dpkg Discord.deb; exec bash;
 
 }
 
@@ -407,16 +636,32 @@ function install_R() {
 
     echo "WARNING: This script will not work when run from within Cryptomator folder.";
 
+    local R_VERSION LIB;
+
     # Get the R major and minor version dynamically
-    local R_VERSION=$(R --slave -e 'cat(R.version$major, ".", strsplit(R.version$minor, "\\.")[[1]][1], sep="")');
+    R_VERSION=$(R --slave -e 'cat(R.version$major, ".", strsplit(R.version$minor, "\\.")[[1]][1], sep="")');
 
     # Define the dynamic user library path
-    local LIB="$HOME/R/x86_64-pc-linux-gnu-library/$R_VERSION";
+    LIB="$HOME/R/x86_64-pc-linux-gnu-library/$R_VERSION";
 
     updatefix; install_apt "r-base"; mkdir -p "$LIB";
 
     R --slave -e "install.packages('languageserver', repos='https://cran.csiro.au', lib='$LIB')";
-    
+
+    if [ ! -f "$HOME/.lintr" ]; then
+
+        {
+            printf "linters: linters_with_defaults(\n";
+            printf "  line_length_linter(120),\n";
+            printf "  indentation_linter = NULL,\n";
+            printf "  trailing_whitespace_linter = NULL,\n";
+            printf "  commented_code_linter = NULL\n";
+            printf ")\n";
+
+        } > "$HOME/.lintr";
+
+    fi
+
 }
 
 function install_javascript() {
@@ -490,6 +735,8 @@ function install_py() {
             echo "Failed to install pip."; exit 1;
         fi
     fi 
+
+    install_apt python3.12-dev; # Install Python development headers
 
 }
 
@@ -800,149 +1047,20 @@ function convert_to_mp4() {
 
 }
 
-function insert_script() {
-
-    trap closing INT TERM EXIT;
-
-    local write_type input output insert;
-
-    while [ "$1" != "" ]; do
-
-        case "$1" in
-            -a | -o) 
-                if [ -z "$write_type" ]; then write_type="$1"; else 
-                    echo "Error: Too many write types provided." >&2; exit 1;
-                fi
-            ;;
-            *) 
-                if [ -f "$1" ]; then
-
-                    if [ -z "$input" ]; then input="$1";
-
-                    elif [ -z "$output" ]; then output="$1"; else 
-                        echo "Error: Too many files provided." >&2; exit 1;
-                    fi
-
-                fi
-            ;;
-        esac
-        shift;
-    done
-
-    # Check if the write flag was provided
-    if [ -z "$write_type" ]; then echo "Error: No valid write flag was provided. Use [-a, -o]" >&2; exit 1; fi
-
-    # Check if the input file exists
-    if [ ! -f "$input" ]; then echo "Error: No script source file was provided." >&2; exit 1; fi
-
-    # Check if the output file exists
-    if [ ! -f "$output" ]; then echo "Error: No output file provided." >&2; exit 1; fi
-
-    local TAGS="# <CSF-S>"; # Custom Shell Function - Start Tag
-    local TAGE="# <CSF-E>"; # Custom Shell Function - End Tag
-    local output_ts output_te input_st input_et;
-
-    # Search for the opening and closing CSF tags in input
-    input_st=$(grep -n "^$TAGS$" "$input" | cut -d: -f1 | head -n1);
-    input_et=$(grep -n "^$TAGE$" "$input" | cut -d: -f1 | tail -n1);
-
-    # Search for the opening and closing CSF tags in output
-    output_ts=$(grep -n "^$TAGS$" "$output" | cut -d: -f1 | head -n1);
-    output_te=$(grep -n "^$TAGE$" "$output" | cut -d: -f1 | tail -n1);
-
-    # Check for missing start tag in input
-    if [ -z "$input_st" ]; then
-        echo "Error: Missing start CSF tag in the input file." >&2; exit 1;
-    fi
-
-    # Check for missing end tag in input
-    if [ -z "$input_et" ]; then
-        echo "Error: Missing end CSF tag in the input file." >&2; exit 1;
-    fi
-
-    # Check if the tags are in the correct order in input
-    if [ "$input_st" -ge "$input_et" ]; then
-        echo "Error: Input file is corrupted. Tags are incorrectly ordered." >&2; exit 1;
-    fi
-
-    # Check for missing start tag in output
-    if [ -n "$output_ts" ] && [ -z "$output_te" ]; then
-        echo "Error: Output file is corrupted. End tag is missing." >&2; exit 1;
-    fi
-    
-    # Check for missing end tag in output
-    if [ -z "$output_ts" ] && [ -n "$output_te" ]; then
-        echo "Error: Output file is corrupted. Start tag is missing." >&2; exit 1;
-    fi
-
-    # Check for both missing tags in output
-    if [ -z "$output_ts" ] && [ -z "$output_te" ]; then
-
-        # Append the CSF tags
-        if ! echo -e "\n$TAGS\n$TAGE" >> "$output"; then
-            echo "Error: Failed to append CSF tags to User .bashrc." >&2; exit 1;
-        fi
-
-        # Update output_ts and output_te after appending tags
-        output_ts=$(grep -n "^$TAGS$" "$output" | cut -d: -f1 | head -n1)
-        output_te=$(grep -n "^$TAGE$" "$output" | cut -d: -f1 | tail -n1)
-        
-    fi
-
-    # Check if the tags are in the correct order in output
-    if [ "$output_ts" -ge "$output_te" ]; then
-        echo "Error: Output file is corrupted. Tags are incorrectly ordered." >&2; exit 1;
-    fi
-
-    # Both tags in the input and output exist and are correctly ordered
-
-    middle=$(mktemp); bottom=$(mktemp); 
-
-    # Backup the content between the tags from the output
-    if ! sed -n "$((output_ts+1)),$((output_te-1))p" "$output" > "$middle"; then
-        echo "Error: Failed to extract the content between the tags." >&2; exit 1;
-    fi
-
-    # Backup the content from the end tag to EOF
-    if ! sed -n "$output_te,\$p" "$output" > "$bottom"; then
-        echo "Error: Failed to extract the content after the end tag." >&2; exit 1;
-    fi
-
-    # Remove the existing content from (not including) the start tag to EOF
-    if ! sed -i "$((output_ts+1)),\$d" "$output"; then
-        echo "Error: Failed to remove the existing content below the start tag." >&2; return 1
-    fi
-
-    insert=$(sed -n "$((input_st+1)),$((input_et-1))p" "$input");
-
-    if [ "$write_type" == "-a" ]; then echo "$insert" >> "$middle";
-
-    elif [ "$write_type" == "-o" ]; then echo "$insert" > "$middle"; fi 
-
-    # Insert the new content below the start tag
-    if ! cat "$middle" >> "$output"; then
-        echo "Error: Failed to insert the new content below the start tag." >&2; exit 1;
-    fi
-
-    # Append the backed up content after the new content
-    if ! cat "$bottom" >> "$output"; then
-        echo "Error: Failed to append the backed-up content." >&2; exit 1;
-    fi
-
-    # Clean up temporary files
-    rm -f "$middle" "$bottom";
-
-    echo "Bashrc has been updated successfully.";
-
-}
-
 function git_push() {
 
     if [ $# -eq 0 ]; then echo "No inputs. Usage: git_push <branch> <message>"; return 1;
     elif [ $# -ge 3 ]; then echo "Too many inputs. Usage: git_push <branch> <message>"; return 1; fi
 
-    local branch msg;
+    # Wake up the card by sending 'quit' to gpg --edit-card
+    {
+        (gpg --command-fd 0 --edit-card <<< "quit" >/dev/null 2>&1) &&
+        (gpg --command-fd 0 --card-status <<< "quit" >/dev/null 2>&1)
+    
+    } || emsg "Failed to wake up YubiKey" -Exit;
 
+    local branch msg;
+    
     if [ $# -eq 2 ]; then branch="$1"; msg="$2"; else 
         msg="$1"; branch="$(git branch --show-current)";
     fi
@@ -1025,6 +1143,7 @@ function help() {
             echo -e "${HSTL}copy_dir${HRST} - Copy files from source to destination."
             echo -e "${HSTL}remove_files${HRST} - Remove files from the system."
             echo -e "${HSTL}list_deb${HRST} - List Debian packages."
+            echo -e "${HSTL}startup_log${HRST} - Show startup log."
             ;;
 
         -setup)
@@ -1100,6 +1219,12 @@ function help() {
             echo -e "Commit changes with a message:                     ${HSTL}git commit -m \"message\"${HRST}"
             echo -e "Amend the last commit:                             ${HSTL}git commit --amend${HRST}"
             echo -e "Show commit history:                               ${HSTL}git log${HRST}"
+
+            echo -e "\n${HCLR}Comparing Changes:${HRST}"
+            echo -e "Difference in working directory & index:           ${HSTL}git diff${HRST}"
+            echo -e "Difference in working directory & last commit:     ${HSTL}git diff HEAD${HRST}"
+            echo -e "Difference in two commits:                         ${HSTL}git diff <commit1> <commit2>${HRST}"
+            echo -e "Difference for a specific file:                    ${HSTL}git diff <file>${HRST}"
 
             echo -e "\n${HCLR}Remote Commands:${HRST}"
             echo -e "Push current branch to remote:                     ${HSTL}git push${HRST}"
@@ -1186,13 +1311,11 @@ function help() {
 }
 
 # Export common functions for use in subshells
-export -f closing copy_dir change_owner remove_files install_flatpak install_dpkg \
-install_apt updatefix convert_to_mp4 conda_run git_push add_gpg insert_script;
+export -f emsg closing copy_dir change_owner remove_files install_flatpak install_dpkg \
+install_apt updatefix convert_to_mp4 conda_run git_push add_gpg insert_script setup_autostart_app;
 
 # Export application installation functions for use in subshells
 export -f install_nordvpn install_rust install_R install_javascript install_py;
-
-echo "Welcome to the Linux environment. Type 'help' to see available functions.";
 
 if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env";  # Source Rust environment
@@ -1216,15 +1339,11 @@ unset __conda_setup
 export NVM_DIR="$HOME/.nvm";
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh";  # This loads nvm
 
-# Home for public keys
-mkdir -p "$HOME/.ssh/pubkeys/yubikey"
-chmod 700 "$HOME/.ssh"
-chmod 700 "$HOME/.ssh/pubkeys"
-chmod 700 "$HOME/.ssh/pubkeys/yubikey"
+echo "Welcome to the Linux environment. Type 'help' to see available functions.";
 
 # <CSF-E>
 
-# Code below is outside of the CSF tags and will not be included in the bashrc file
-# Code below is outside of the CSF tags and will not be included in the bashrc file
-# Code below is outside of the CSF tags and will not be included in the bashrc file
+# Code below is outside of the CSF tags and will not be included in the inserted file
+# Code below is outside of the CSF tags and will not be included in the inserted file
+# Code below is outside of the CSF tags and will not be included in the inserted file
 

@@ -1,5 +1,2 @@
-.gitignore
-Cargo.lock
-dat/*
-src/*
 !src/func.sh
+*

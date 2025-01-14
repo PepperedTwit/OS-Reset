@@ -14,7 +14,7 @@
         "terminal.integrated.profiles.linux": {
             "bash": {
                 "path": "bash",
-                "args": ["-c", ". $PRIV && exec bash -i"]
+                "args": ["-c", "git branch && . $PRIV && exec bash -i"]
             }
         },
 
@@ -23,7 +23,7 @@
             "DIR": "Documents\\PowerShell\\Modules\\Func"
         },
 
-        "terminal.integrated.defaultProfile.windows": "Git Bash",
+        "terminal.integrated.defaultProfile.windows": "PowerShell",
 
         "terminal.integrated.profiles.windows": {
             "PowerShell": {
